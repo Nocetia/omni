@@ -1,6 +1,6 @@
 {
     "usb": {
-        "enabled": false
+        "enabled": true
     },
     "ui": {
         "timeout_ms": 100

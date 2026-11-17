@@ -1,0 +1,15 @@
+CompileFlags:
+  CompilationDatabase: build/h723_mc02
+  Compiler: arm-none-eabi-g++
+
+Index:
+  Background: Build
+
+InlayHints:
+  Enabled: true
+  ParameterNames: true
+  DeducedTypes: true
+  Designators: true
+  DefaultArguments: false
+  BlockEnd: false
+  TypeNameLimit: 24
