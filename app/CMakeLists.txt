@@ -14,9 +14,13 @@ target_sources(app INTERFACE
     "${CMAKE_CURRENT_SOURCE_DIR}/robot/app.cpp"
 
     "${CMAKE_CURRENT_SOURCE_DIR}/robot/control/control.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/control/remote.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/control/gimbal.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/control/axis.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/control/shooter.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/control/chassis.cpp"
 
-    "${CMAKE_CURRENT_SOURCE_DIR}/robot/tasks/TaskControl.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/robot/tasks/TaskDebug.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/robot/tasks/TaskUI.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/robot/tasks/TaskVision.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/Task/TaskGimbal.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/Task/TaskChassis.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/Task/TaskRemoter.cpp"
 )
