@@ -2,12 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
-
+//TODO：接入键盘逻辑（roll，换头，spin), dyaw，dpitch
 namespace robot::remote
 {
 controller::controller(const cfg::remote_params& config) : config_(config)
 {
     // Invalid thresholds could turn one wheel gesture into repeated shots; validate once.
+    //TODO: static_assert()
     valid_ = std::isfinite(config.yaw_rate) && config.yaw_rate >= 0.0f &&
              std::isfinite(config.pitch_rate) && config.pitch_rate >= 0.0f &&
              std::isfinite(config.mouse_yaw) && std::isfinite(config.mouse_pitch) &&
@@ -55,7 +56,7 @@ command controller::update(const input& input, float dt_s)
             fric_enabled_ = false;
             autoaim_ = false;
             roll_enabled_ = false;
-            wheel_ready_ = false;
+            wheel_ready_ = false;//拨轮
             keyboard_vx_ = 0.0f;
             keyboard_vy_ = 0.0f;
             mouse_yaw_ = 0.0f;
@@ -129,8 +130,8 @@ command controller::update(const input& input, float dt_s)
     // Combined keyboard/stick input must stay inside the configured translation limits.
     output.chassis.vx =
         std::clamp(keyboard_vx_ + value.left_y * config_.vx, -config_.vx, config_.vx);
-    output.chassis.vy = std::clamp(keyboard_vy_ - (spin ? 0.0f : value.left_x * config_.vy),
-        -config_.vy, config_.vy);
+    output.chassis.vy = 
+        std::clamp(keyboard_vy_ - value.left_x * config_.vy,-config_.vy, config_.vy);//键盘向左正，遥控器左负, 底盘向左正
     output.chassis.wz = spin ? config_.wz : 0.0f;
     output.mouse_yaw = mouse_yaw_;
     output.mouse_pitch = mouse_pitch_;

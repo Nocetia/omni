@@ -14,6 +14,7 @@ constexpr float min_pitch_cos = 0.01f; // Numerical guard for Euler-rate divisio
 
 bool valid(const cfg::gimbal_params& config)
 {
+    //TODO: static_assert()
     return config.attitude_timeout_ms > 0 && config.vision_timeout_ms > 0 &&
            std::isfinite(config.yaw_rate_limit) && config.yaw_rate_limit > 0.0f &&
            std::isfinite(config.pitch_rate_limit) && config.pitch_rate_limit > 0.0f &&
@@ -56,8 +57,9 @@ void limit(axis_ref& ref, float minimum, float maximum)
 {
     const float position = std::clamp(ref.pos, minimum, maximum);
     // Stop outward feedforward at the pitch stop, not just its position target.
-    if (position != ref.pos || (position <= minimum && ref.vel < 0.0f) ||
-        (position >= maximum && ref.vel > 0.0f))
+    if (position != ref.pos || 
+        (position <= minimum && ref.vel < 0.0f) ||
+        (position >= maximum && ref.vel > 0.0f))//越界和恰好在边界仍往外
     {
         ref.vel = 0.0f;
         ref.acc = 0.0f;

@@ -5,8 +5,8 @@
 ## 当前实现与数据依赖
 
 `robot/control/control.hpp` 集中定义业务数据和接口；`control.cpp` 只组织两条控制链。
-Remote、Gimbal、Shooter、Chassis 业务函数及三个任务入口已实现。
-硬件采集、实际电机发送和视觉协议接入尚未完成，当前默认参数也不会使能电机。
+Remote、Gimbal、Shooter、Chassis 业务函数及四个任务入口已实现，Vision 已接入 USB 收发。
+硬件采集、实际电机发送及遥测业务数据来源尚未完成，当前默认参数也不会使能电机。
 下面第 1～31 节保留为架构设计参考，其中示例文件、API、CAN 编号不代表当前接线。
 
 ```text
@@ -52,16 +52,18 @@ IMU / Vision / 云台与发射反馈 ─────→ TaskGimbal
 
 ### 线程、采样与同步约定
 
-- `app.cpp` 先初始化 topics，再创建三个 `TX_DONT_START` 任务，全部成功后启动；
-  失败不进行部分启动。空的 Vision、Debug、UI 入口不加入构建，也不创建无业务的线程。
-  现有 `build_config.hpp` 中这些开关仍需在对应实现完成后接入。
-- 调度参数在 `cfg::gimbal_thread/chassis_thread/remote_thread`，默认周期 1 tick。
+- `app.cpp` 先初始化 topics、注册 Vision 接收回调，再创建四个 `TX_DONT_START` 任务，
+  全部成功后启动；失败不进行部分启动。空的 Debug、UI 入口不加入构建。
+  现有 `build_config.hpp` 中 Debug/UI 开关仍需在对应实现完成后接入。
+- 调度参数在 `cfg::gimbal_thread/chassis_thread/remote_thread/vision_thread`；
+  前三个默认周期 1 tick，Vision 每次发送后休眠 2 ticks。
   这是名义调度间隔，不是硬实时测量结果；`dt_s` 使用实际经过时间。
 - `now_ms`、所有 `received_ms` 使用 `HAL_GetTick()` 的同一毫秒时钟。
   读取缓存不能刷新源数据时间；电机快照时间与 IMU、Vision 各自接收时间分别保留。
 - `remote_inputs`、`gimbal_inputs`、`chassis_inputs` 是当前接入点，每个 topic 仅一个写入者。
   输入发布者在任务上下文发布完整副本，不能在 ISR 使用依赖 mutex 的 `msg::topic`。
-  Gimbal/Chassis 任务覆盖输入中的 `remote/now_ms/dt_s`，其余字段由对应采集方负责。
+  Gimbal/Chassis 任务覆盖输入中的 `remote/now_ms/dt_s`，Gimbal 还覆盖 `vision`；
+  其余字段由对应采集方负责。
 - `msg` 的 mutex 只保护快照复制，不跨越控制计算；忙时保留旧快照，由时间检查判断能否继续使用。
   `gimbal_outputs/chassis_outputs` 目前用于结果观察，发布竞争允许跳过一次；
   接电机时应在各自控制线程直接应用本周期输出，不将这些无时戳的缓存当成可靠电机发送队列。
@@ -93,8 +95,50 @@ IMU / Vision / 云台与发射反馈 ─────→ TaskGimbal
 `robot/configs/robot_config.hpp` 中未确认的增益、速度、几何限制保持未使能默认值，
 需要实测填写，不能直接上电试转。当前配置为 Gimbal FDCAN1、Chassis FDCAN2；
 Roll/左摩擦轮的 ID，以及底盘左前/左后的 ID 存在重复，须结合电机型号确认和修正后才能接线。
-IMU/遥控/视觉/裁判接入、电机模式适配、轮速闭环和功率限制、实际 CAN 发送仍是后续工作；
+IMU/遥控/裁判采集适配、视觉坐标对齐、遥测业务数据来源、电机模式适配、轮速闭环和功率限制、
+实际 CAN 发送仍是后续工作；
 当前没有新增统一 Motor Thread。
+
+### Vision USB 接入
+
+`robot/Service/protocol.hpp` 保持纯协议：28 字节命令的组帧、CRC/有限数检查和 44 字节遥测编码。
+`vision.hpp` 声明消息与服务接口，`ServiceVision.cpp` 实现接收回调、`make_telemetry()` 和发送线程。
+协议头不依赖控制器、msg 或 ThreadX，协议测试可以独立运行。
+
+```text
+BSP usb_rx → receive / vision_parser → vision::targets → TaskGimbal
+gimbal_inputs → TaskGimbal → make_telemetry → vision::telemetry → Vision 线程 → USB TX
+```
+
+- `vision::init()` 由 `app_start()` 在调度前调用，初始化两个 topic 并注册 `on_rx()`。
+  BSP 已创建唯一 USB RX 线程，回调在它的 2048 字节栈上执行；应用不能再调用 `read/poll`，
+  其他服务也不能争用此 CDC 的 RX 回调或 TX 字节流。收发服务持续到固件结束，不支持外部终止线程。
+- 回调独占解析器，支持分片、粘包、损坏帧重同步；字节间隔达到
+  `cfg::gimbal.vision_timeout_ms` 时清除半包。回调数据只在调用期间有效。
+  每个校验成功的命令增加 `sequence`，`received_ms` 是实际解码时的 HAL 毫秒时间。
+  `mode == 2` 转为 `target.fire`；其余模式不授予开火权限，沿用参考工程的判断。
+- 接收的六个运动字段保留 rad、rad/s、rad/s² 原值。视觉端必须与当前 Gimbal 使用同一坐标系；
+  旧控制器的 Pitch 位置取负、速度不取负和加速度前馈取负属于旧控制律约定，没有复制到新接口。
+  Gimbal 仍负责目标超时、获取角度范围、机械限位和瞄准许可。
+- `make_telemetry(const gimbal_input&)` 是无共享状态的转换函数，由 TaskGimbal 每周期调用。
+  输入发布者填写 `vision_feedback.detect_color/bullet_speed/bullet_count`，确认业务来源有效且新鲜后
+  才置 `vision_feedback.valid = true`；弹速单位 m/s，弹数必须来自实发统计，不能使用遥控请求数。
+  `detect_color` 是上位机要检测的颜色，采集适配层负责从己方颜色转换。
+- 构造遥测时检查输入快照、IMU 在线/阶段/时间和发送数值，使用当前姿态的 WXYZ 四元数，
+  将连续 `total_yaw` 和 `pitch` 转为度，角速度使用机体系 `gyro.z/gyro.y`（rad/s）。
+  不再把旧机器人的 roll 当作 pitch。遥测 `mode` 保持 1，`reset_tracker` 保持 false；
+  时间戳与序号沿用源姿态，读取缓存不产生新的观测。
+- TaskGimbal 只发布有效遥测；尚未接入 `vision_feedback` 时不会发送占位数据。
+  TX 首次取得有效快照后保留最后一份数据并重复发送，包括后续传感器间断和 USB 重连；
+  这是参考协议的保留行为，44 字节线上报文没有陈旧标志。业务若需停止发送可发布 `valid = false`。
+- 发送线程先读取本地副本，再编码和 `write()`，不会在 USB 等待期间持有消息锁。
+  `vision_write_timeout_ms` 默认 20 ms，是每次 USB transfer 的超时。
+  每次发送后休眠 `vision_thread.period_ticks`，实际间隔包括发送耗时，不承诺严格 500 Hz。
+  完整检查返回状态与发送长度，失败/部分发送计数保留供调试，下一周期重新发送完整帧。
+- `msg::topic` 使用 mutex 和 `TX_NO_WAIT`，只保留最新值；读忙时使用本地旧快照，
+  接收发布忙时计数并允许丢一帧，由消费者时间检查限制旧目标使用期限，不保证逐帧交付。
+  ServiceVision 没有 PRIMASK 或 `__disable_irq()`；USB BSP 超时收尾及 ThreadX/USBX 内部
+  的既有中断保护不在本次应用迁移范围内，不能将整个调用链描述为完全不屏蔽中断。
 
 ### 验证
 
@@ -102,12 +146,16 @@ IMU/遥控/视觉/裁判接入、电机模式适配、轮速闭环和功率限�
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File app/tests/run_control_tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File app/tests/run_vision_tests.ps1
 cmake --build --preset h723_mc02
 ```
 
 测试脚本需要已配置的固件编译数据库和本机 g++；可通过 `-Compiler`、`-CompileDatabase` 指定路径。
 覆盖遥控边沿、累计事件、串级 PID/前馈、Pitch 限位、视觉开火许可、热量/卡弹、
-两条控制链独立失效与毫秒计数回绕。主机测试和编译不替代上板的方向、限位、时序及实机安全验证。
+两条控制链独立失效、遥测坐标/单位转换与毫秒计数回绕。主机测试用最小 HAL 时钟声明替代
+芯片寄存器头；USB/ThreadX 链接桩一旦被调用即失败，不模拟或验证实际 USB 传输。
+协议脚本仅依赖主机 g++，覆盖分片/粘包、CRC/非有限数拒收、重新同步、固定布局和 fast-math 编译。
+USB 枚举、收发、部分写、主机停读、拔插恢复及新旧坐标方向仍需上板验证。
 
 ## 1. Architecture Overview
 

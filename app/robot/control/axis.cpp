@@ -13,6 +13,7 @@ namespace
 constexpr auto pid_mode =
     ::control::pid_mode::position | ::control::pid_mode::derivative_on_measurement;
 
+    //TODO：static_assert()
 bool valid_pid(const cfg::pid_params& config, float limit)
 {
     return std::isfinite(config.kp) && std::isfinite(config.ki) && std::isfinite(config.kd) &&

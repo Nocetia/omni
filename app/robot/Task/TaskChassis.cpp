@@ -21,7 +21,6 @@ void chassis_thread_entry(ULONG)
     uint32_t previous_ms = HAL_GetTick();
     for (;;)
     {
-        tx_thread_sleep(cfg::chassis_thread.period_ticks);
         sensors.read(input);
         commands.read(command);
         input.remote = command;
@@ -32,5 +31,6 @@ void chassis_thread_entry(ULONG)
         const auto output = control.update(input);
         // Apply to this task's own wheel motors here when their hardware mapping is supplied.
         chassis_outputs.publish(output);
+        tx_thread_sleep(cfg::chassis_thread.period_ticks);
     }
 }

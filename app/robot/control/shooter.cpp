@@ -8,7 +8,7 @@ namespace robot::shooter
 controller::controller(const cfg::shooter_params& config) : config_(config)
 {
     // Unset speeds/step angles cannot define a shot; immutable parameters are checked once.
-    // TODO：
+    // TODO：static_assert()
     valid_ = std::isfinite(config.fric_speed) && config.fric_speed > 0.0f &&
              config.fric_ready_ratio > 0.0f && config.fric_ready_ratio <= 1.0f &&
              std::isfinite(config.trigger_speed) && config.trigger_speed > 0.0f &&

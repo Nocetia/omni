@@ -36,52 +36,16 @@ namespace robot
             bool detect_color{};
             bool reset_tracker{};
             uint8_t mode{};
-             // W, X, Y, Z in the legacy gimbal frame.
+            // W, X, Y, Z; body-to-world in the agreed gimbal frame.
             float q[4]{1.0f, 0.0f, 0.0f, 0.0f};
             float yaw{};                        // Degrees; continuous yaw.
-            float gyro_yaw{};                   // rad/s.
+            float gyro_yaw{};                   // Body Z, rad/s.
             float pitch{};                      // Degrees.
-            float gyro_pitch{};                 // rad/s.
+            float gyro_pitch{};                 // Body Y, rad/s.
             float bullet_speed{};               // m/s.
             uint16_t bullet_count{};
         };
 
-        // struct lower_status
-        // {
-        //     bool inited{};
-        //     bool color{};
-        //     uint8_t level{};
-        //     uint16_t heatlimit{};
-        //     uint16_t heatnow{};
-        //     float bullet_speed{};
-        // };
-
-        // struct lower_command
-        // {
-        //     bool ifmove{};
-        //     bool ifjump{};
-        //     bool ifspin{};
-        //     bool ifturn{};
-        //     bool ifstair{};
-        //     bool iffly{};
-        //     bool ifgimbalonly{};
-        //     int16_t yaw_cur{};
-        //     int8_t vx{};
-        //     int8_t vy{};
-        //     int8_t len_level{};
-        //     int8_t tri_spd{};
-        // };
-
-        // struct lower_ui
-        // {
-        //     bool reset{};
-        //     bool fire{};
-        //     bool bulletfreq{};
-        //     bool aim_rune{};
-        //     uint8_t aim_target_now{};
-        //     uint8_t aim_target_x{};
-        //     uint8_t aim_target_y{};
-        // };
 
         inline uint32_t read_u32_le(const uint8_t* data)
         {

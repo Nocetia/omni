@@ -1,4 +1,5 @@
 #include "control/control.hpp"
+#include "Service/vision.hpp"
 
 #include <cmath>
 #include <cstdio>
@@ -604,6 +605,61 @@ void test_control_tasks()
     check(cooling.update(input).shooter.trigger.cmd.velocity > 0.0f,
         "Disarming preserves spent heat but still allows fresh referee cooling");
 }
+
+void test_vision_telemetry()
+{
+    gimbal_input input;
+    input.now_ms = 100;
+    input.received_ms = 95;
+    input.attitude.online = true;
+    input.attitude.stage = imu::attitude::phase::running;
+    input.attitude.received_ms = 90;
+    input.attitude.sequence = 7;
+    input.attitude.total_yaw = 4.0f * pi;
+    input.attitude.pitch = -pi / 6.0f;
+    input.attitude.roll = 0.4f;
+    input.attitude.quaternion = {0.5f, -0.5f, 0.5f, -0.5f};
+    input.attitude.gyro = {1.0f, 2.0f, 3.0f};
+    input.vision_feedback = {true, 25.0f, 17, true};
+
+    const auto sample = vision::make_telemetry(input);
+    check(sample.valid && sample.received_ms == 90 && sample.sequence == 7,
+        "Telemetry preserves the attitude observation time and sequence");
+    check(near(sample.data.yaw, 720.0f) && near(sample.data.pitch, -30.0f),
+        "Telemetry converts continuous yaw and current pitch to degrees without old roll mapping");
+    check(sample.data.q[0] == 0.5f && sample.data.q[1] == -0.5f && sample.data.q[2] == 0.5f &&
+              sample.data.q[3] == -0.5f && sample.data.gyro_pitch == 2.0f &&
+              sample.data.gyro_yaw == 3.0f,
+        "Quaternion and body gyro stay in the current gimbal frame");
+    check(sample.data.detect_color && sample.data.mode == 1 && !sample.data.reset_tracker &&
+              sample.data.bullet_speed == 25.0f && sample.data.bullet_count == 17,
+        "Telemetry uses supplied color, bullet speed and confirmed shot count");
+
+    input.vision_feedback.valid = false;
+    check(!vision::make_telemetry(input).valid,
+        "Missing robot feedback cannot fabricate telemetry");
+    input.vision_feedback.valid = true;
+    input.attitude.online = false;
+    check(!vision::make_telemetry(input).valid, "Offline IMU cannot refresh telemetry");
+    input.attitude.online = true;
+    input.attitude.stage = imu::attitude::phase::calibrating;
+    check(!vision::make_telemetry(input).valid, "Calibration data cannot refresh telemetry");
+    input.attitude.stage = imu::attitude::phase::running;
+    input.attitude.received_ms = 0;
+    check(!vision::make_telemetry(input).valid, "Expired attitude cannot refresh telemetry");
+    input.attitude.received_ms = 90;
+    input.received_ms = 0;
+    check(!vision::make_telemetry(input).valid, "Expired robot snapshot cannot refresh telemetry");
+    input.now_ms = 5;
+    input.received_ms = UINT32_MAX - 4;
+    input.attitude.received_ms = UINT32_MAX - 4;
+    check(vision::make_telemetry(input).valid, "Telemetry age checks tolerate millisecond wrap");
+    input.attitude.quaternion.w = nan;
+    check(!vision::make_telemetry(input).valid, "Nonfinite quaternion cannot reach USB");
+    input.attitude.quaternion.w = 0.5f;
+    input.vision_feedback.bullet_speed = -1.0f;
+    check(!vision::make_telemetry(input).valid, "Negative projectile speed cannot reach USB");
+}
 } // namespace
 
 int main()
@@ -614,6 +670,7 @@ int main()
     test_chassis();
     test_remote();
     test_control_tasks();
+    test_vision_telemetry();
     std::printf("Control tests: %u checks, %u failures\n", checks, failures);
     return failures == 0 ? 0 : 1;
 }

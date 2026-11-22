@@ -53,7 +53,11 @@ $sources = @("control", "remote", "axis", "gimbal", "shooter", "chassis") | ForE
     Join-Path $repo "app/robot/control/$_.cpp"
 }
 $sources += Join-Path $PSScriptRoot "control_test.cpp"
-$arguments = @("-std=c++17", "-O0", "-g", "-Wall", "-Wextra", "-Werror", "-static") +
+$sources += Join-Path $repo "app/robot/Service/ServiceVision.cpp"
+$sources += Join-Path $PSScriptRoot "stubs/vision_runtime.cpp"
+# HAL register headers are unavailable on the host. Runtime USB/ThreadX stubs abort if called.
+$arguments = @("-std=c++17", "-O0", "-g", "-Wall", "-Wextra", "-Werror", "-static",
+    "-I" + (Join-Path $PSScriptRoot "stubs")) +
     $flags + $sources + @("-o", $executable)
 
 Push-Location $entry.directory

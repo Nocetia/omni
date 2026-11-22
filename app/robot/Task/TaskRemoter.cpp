@@ -19,7 +19,6 @@ void remote_thread_entry(ULONG)
     uint32_t previous_ms = HAL_GetTick();
     for (;;)
     {
-        tx_thread_sleep(cfg::remote_thread.period_ticks);
         source.read(input);
         const uint32_t now_ms = HAL_GetTick();
         const float dt_s = static_cast<float>(now_ms - previous_ms) * 0.001f;
@@ -33,5 +32,6 @@ void remote_thread_entry(ULONG)
         const auto command = control.update(sample, dt_s);
         // Cumulative events remain in the next publication if this nonblocking publish is busy.
         remote_commands.publish(command);
+        tx_thread_sleep(cfg::remote_thread.period_ticks);
     }
 }

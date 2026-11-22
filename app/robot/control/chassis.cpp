@@ -8,6 +8,7 @@ namespace robot::chassis
 controller::controller(const cfg::chassis_params& config) : config_(config)
 {
     // Geometry is a divisor; zero/unset geometry and limits must not enable wheel output.
+    //static_assert()
     valid_ = std::isfinite(config.wheel_radius_m) && config.wheel_radius_m > 0.0f &&
              std::isfinite(config.radius_m) && config.radius_m > 0.0f &&
              std::isfinite(config.max_wheel_speed) && config.max_wheel_speed > 0.0f;

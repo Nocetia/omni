@@ -37,7 +37,7 @@ gimbal_output gimbal_control::update(const gimbal_input& input)
     }
 
     auto command = input.remote.gimbal;
-    command.yaw_delta = input.remote.mouse_yaw - mouse_yaw_;
+    command.yaw_delta = input.remote.mouse_yaw - mouse_yaw_;//现在-过去
     command.pitch_delta = input.remote.mouse_pitch - mouse_pitch_;
     mouse_yaw_ = input.remote.mouse_yaw;
     mouse_pitch_ = input.remote.mouse_pitch;
