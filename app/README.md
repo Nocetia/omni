@@ -6,22 +6,23 @@
 
 `robot/control/control.hpp` 集中定义业务数据和接口；`control.cpp` 只组织两条控制链。
 Remote、Gimbal、Shooter、Chassis 业务函数及四个任务入口已实现，Vision 已接入 USB 收发。
-硬件采集、实际电机发送及遥测业务数据来源尚未完成，当前默认参数也不会使能电机。
+TaskInput 已聚合遥控、姿态、视觉目标、电机反馈和裁判数据，并生成视觉遥测。
+遥控/电机硬件采集和实际电机发送尚未完成，当前默认参数也不会使能电机。
 下面第 1～31 节保留为架构设计参考，其中示例文件、API、CAN 编号不代表当前接线。
 
 ```text
-逐帧遥控输入 → TaskRemoter → remote::command
-                                  ├→ TaskGimbal  → Gimbal → 本周期 aim → Shooter
-                                  └→ TaskChassis → Chassis → 四轮速度
-IMU / Vision / 云台与发射反馈 ─────→ TaskGimbal
-底盘电机反馈 ─────────────────────→ TaskChassis
+remote_inputs / gimbal_feedback / chassis_feedback ─┐
+imu::attitude::output / vision::targets ─────────────┼→ TaskInput
+referee::read() ────────────────────────────────────┘     ├→ gimbal_inputs → TaskGimbal
+                                                        ├→ chassis_inputs → TaskChassis
+                                                        └→ vision::telemetry → USB TX
 ```
 
 - `gimbal_control::update(gimbal_input)` 返回 `gimbal_output`，包含云台、发射命令和瞄准状态。
   Shooter 使用本周期的 `gimbal::status`，不会读取另一个线程或上一周期的瞄准结果。
 - `chassis_control::update(chassis_input)` 独立返回 `chassis::output`，不依赖云台输出。
   当前实现正方形 X 型全向轮逆运动学、统一比例限速及安装方向转换；轮速闭环和功率限制尚未接入。
-- `remote::controller` 仅由 Remote 任务持有，两个控制任务各自持有控制器实例和命令副本，
+- `remote::controller` 仅由 Input 任务持有，两个控制任务各自持有控制器实例和命令副本，
   不共享 PID 状态、电机对象，也不重复处理按键边沿。
 - `gimbal::controller` 通过两个非拥有的 `axis_control&` 调用 Yaw/Pitch 控制器；
   被引用对象必须活得更久。当前 `pid_axis` 单独实现串级 PID、预测和前馈，替换控制律不需要改 Gimbal。
@@ -39,7 +40,7 @@ IMU / Vision / 云台与发射反馈 ─────→ TaskGimbal
 | 拨轮离开中位 | 手动单发一次；回中后才接受下次动作，自瞄时忽略 |
 | trigger（`reading.button`）按下沿 | 切换手动/自瞄 |
 | 右摇杆、鼠标 | 沿用原来的 Yaw/Pitch 方向；摇杆是角速度，鼠标是新帧位移 |
-| WASD、左摇杆 | 平移；SHIFT 或左拨杆上位进入旋转，旋转时忽略左摇杆横向量 |
+| WASD、左摇杆 | 平移；SHIFT 或左拨杆上位进入旋转，旋转时仍保留平移输入 |
 
 底盘采用 x 向前、y 向左、wz 逆时针的坐标定义，因此 A/左移为正 y；
 旧下板报文中向右为正的数值符号不直接沿用。旧腿长、跳跃等异构底盘命令没有套到全向轮底盘上。
@@ -52,32 +53,38 @@ IMU / Vision / 云台与发射反馈 ─────→ TaskGimbal
 
 ### 线程、采样与同步约定
 
-- `app.cpp` 先初始化 topics、注册 Vision 接收回调，再创建四个 `TX_DONT_START` 任务，
-  全部成功后启动；失败不进行部分启动。空的 Debug、UI 入口不加入构建。
+- `app.cpp` 初始化 topics、注册 Vision 接收回调，创建四个 `TX_DONT_START` 应用任务；
+  按 `user_config::ahrs_device` 启动 BMI088/DMIMU，配置了裁判串口时启动 referee 服务，
+  最后启动 Input、Gimbal、Chassis、Vision。应用任务在依赖初始化成功前不运行。
+  空的 Debug、UI 入口不加入构建。
   现有 `build_config.hpp` 中 Debug/UI 开关仍需在对应实现完成后接入。
-- 调度参数在 `cfg::gimbal_thread/chassis_thread/remote_thread/vision_thread`；
+- 调度参数在 `cfg::gimbal_thread/chassis_thread/input_thread/vision_thread`；
   前三个默认周期 1 tick，Vision 每次发送后休眠 2 ticks。
+  Input 优先级为 3，控制任务为 4，同为就绪态时先聚合输入；输入栈为 4096 字节。
   这是名义调度间隔，不是硬实时测量结果；`dt_s` 使用实际经过时间。
 - `now_ms`、所有 `received_ms` 使用 `HAL_GetTick()` 的同一毫秒时钟。
   读取缓存不能刷新源数据时间；电机快照时间与 IMU、Vision 各自接收时间分别保留。
-- `remote_inputs`、`gimbal_inputs`、`chassis_inputs` 是当前接入点，每个 topic 仅一个写入者。
+- 硬件适配方发布 `remote_inputs`、`gimbal_feedback`（`gimbal_sample`）和
+  `chassis_feedback`（`chassis_sample`），每个 topic 仅一个写入者。
   输入发布者在任务上下文发布完整副本，不能在 ISR 使用依赖 mutex 的 `msg::topic`。
-  Gimbal/Chassis 任务覆盖输入中的 `remote/now_ms/dt_s`，Gimbal 还覆盖 `vision`；
-  其余字段由对应采集方负责。
+  `gimbal_sample` 仅含云台及三个发射电机反馈，裁判字段由 Input 填写。
+  Input 是 `gimbal_inputs/chassis_inputs` 的唯一写入者；两条控制任务只覆盖 `now_ms/dt_s`，
+  分别按自身执行时间计算控制周期。`remote_commands` 已删除，映射结果直接放入完整输入。
 - `msg` 的 mutex 只保护快照复制，不跨越控制计算；忙时保留旧快照，由时间检查判断能否继续使用。
   `gimbal_outputs/chassis_outputs` 目前用于结果观察，发布竞争允许跳过一次；
   接电机时应在各自控制线程直接应用本周期输出，不将这些无时戳的缓存当成可靠电机发送队列。
 - 遥控 `sequence` 必须逐解码帧递增，不能每次读缓存都加一。
   原始 latest-value 输入若跳帧，会失能并要求重新解锁，因为丢失的帧可能包含 pause。
   接入时应保证逐帧处理；现有 `receiver::read()` 还缺帧序号，需要补齐后接入。
-- Remote 输出使用累计鼠标位移和单发计数，两条下游控制链频率不同时不会重复消费同一事件。
+- Input 中的遥控映射使用累计鼠标位移和单发计数，两条下游控制链频率不同时不会重复消费同一事件。
   新解锁会话重新建立累计量基线；延迟期间多个单发只合并为一次，不恢复后补打一串。
   这不意味着原始遥控 latest-value topic 能保存每一帧。
 - IMU 使用 `imu::attitude::state`。姿态、陀螺仪和视觉角度必须先统一到相同坐标系；
   当前 Gimbal 按 ZYX 姿态把机体系角速度换成 Euler 角速度，不能把原始 gyro 分量直接当作轴角速度。
   BMI088/DMIMU 的轴向和安装关系仍需采集方统一。
 - 电机采集方在 `health_tick(dt)` 后填写 `motor_feedback::state`。
-  发射的 `heat_valid` 必须同时检查裁判热量包、热量上限和冷却参数的有效性及超时，
+  `cfg::control.feedback_timeout_ms` 仅用于电机快照，保留当前 `UINT32_MAX` 设置。
+  发射的 `heat_valid` 由裁判链路在线状态和状态包、热量包是否已收到决定，
   `heat_sequence` 只在新热量观测时变化。本地按开始拨弹预扣热量，取消/失能不退还未确认的预扣。
 - 角度、角速度、角加速度单位为 rad、rad/s、rad/s²；平移为 m/s。
   `pid_axis` 配置采用连续时间增益，调用现有 PID 时转换为 `ki * dt_s`、`kd / dt_s`，
@@ -95,19 +102,38 @@ IMU / Vision / 云台与发射反馈 ─────→ TaskGimbal
 `robot/configs/robot_config.hpp` 中未确认的增益、速度、几何限制保持未使能默认值，
 需要实测填写，不能直接上电试转。当前配置为 Gimbal FDCAN1、Chassis FDCAN2；
 Roll/左摩擦轮的 ID，以及底盘左前/左后的 ID 存在重复，须结合电机型号确认和修正后才能接线。
-IMU/遥控/裁判采集适配、视觉坐标对齐、遥测业务数据来源、电机模式适配、轮速闭环和功率限制、
+遥控/电机采集适配、IMU/视觉坐标对齐、电机模式适配、轮速闭环和功率限制、
 实际 CAN 发送仍是后续工作；
 当前没有新增统一 Motor Thread。
 
+### 裁判数据接入
+
+`TaskInput.cpp` 内部的 `update_referee()` 读取 `GameRobotStatus_t`、`PowerHeatData_t` 和
+`ShootData_t`，映射热量、热量上限、冷却速率，以及视觉需要的目标颜色、弹速和实发计数。
+当前使用 17 mm 发射机构 1；底盘功率控制尚未实现，不添加未使用的裁判底盘字段。
+
+- 仅使用 `configs/user_config.json` 的 `referee.offline_timeout_ms`，当前为 1000 ms。
+  模块计算 `referee::read().online`，应用不再为各类型数据设置超时。
+  首次未收到所需类型时不标记有效；链路在线时保留各类型的最新值，其他合法帧也可维持在线。
+- `heat_sequence` 直接使用 `PowerHeatData_t` 的更新序号。
+  `ShootData` 非周期发送，最后一次弹速不会因为停止射击而过期。
+  首次取得本发射机构的弹速前，不生成有效视觉遥测。
+- `app_start()` 注册 `referee_shoot_received()`，在 referee 接收线程中逐帧累计本发射机构
+  的实发次数，用无锁原子计数传给 Input；回调不阻塞、不保留传入引用、不禁用全局中断。
+  遥测计数取低 16 位，启动时清零，断线不重置；不使用剩余弹量或操作员请求数代替实发统计。
+- `robot_id` 为 1～9 时检测蓝方，为 101～109 时检测红方；未识别的 ID 不生成有效遥测。
+- 串口由 referee 服务独占 RX。当前 H723 CubeMX 中 USART1 为 921600，现场接标准裁判链路前
+  仍需把板级串口配置调整为对应波特率并重新生成；本次架构调整未修改硬件串口配置。
+
 ### Vision USB 接入
 
-`robot/Service/protocol.hpp` 保持纯协议：28 字节命令的组帧、CRC/有限数检查和 44 字节遥测编码。
+`robot/Service/vision_protocol.hpp` 保持纯协议：28 字节命令的组帧、CRC/有限数检查和 44 字节遥测编码。
 `vision.hpp` 声明消息与服务接口，`ServiceVision.cpp` 实现接收回调、`make_telemetry()` 和发送线程。
 协议头不依赖控制器、msg 或 ThreadX，协议测试可以独立运行。
 
 ```text
-BSP usb_rx → receive / vision_parser → vision::targets → TaskGimbal
-gimbal_inputs → TaskGimbal → make_telemetry → vision::telemetry → Vision 线程 → USB TX
+BSP usb_rx → receive / vision_parser → vision::targets → TaskInput → gimbal_inputs
+TaskInput → make_telemetry → vision::telemetry → Vision 线程 → USB TX
 ```
 
 - `vision::init()` 由 `app_start()` 在调度前调用，初始化两个 topic 并注册 `on_rx()`。
@@ -120,15 +146,15 @@ gimbal_inputs → TaskGimbal → make_telemetry → vision::telemetry → Vision
 - 接收的六个运动字段保留 rad、rad/s、rad/s² 原值。视觉端必须与当前 Gimbal 使用同一坐标系；
   旧控制器的 Pitch 位置取负、速度不取负和加速度前馈取负属于旧控制律约定，没有复制到新接口。
   Gimbal 仍负责目标超时、获取角度范围、机械限位和瞄准许可。
-- `make_telemetry(const gimbal_input&)` 是无共享状态的转换函数，由 TaskGimbal 每周期调用。
-  输入发布者填写 `vision_feedback.detect_color/bullet_speed/bullet_count`，确认业务来源有效且新鲜后
+- `make_telemetry(const gimbal_input&)` 是无共享状态的转换函数，由 TaskInput 每周期调用。
+  Input 填写 `vision_feedback.detect_color/bullet_speed/bullet_count`，确认裁判在线及所需数据已收到后
   才置 `vision_feedback.valid = true`；弹速单位 m/s，弹数必须来自实发统计，不能使用遥控请求数。
   `detect_color` 是上位机要检测的颜色，采集适配层负责从己方颜色转换。
-- 构造遥测时检查输入快照、IMU 在线/阶段/时间和发送数值，使用当前姿态的 WXYZ 四元数，
+- 构造遥测时检查 IMU 在线/阶段/时间和发送数值，不检查未使用的电机时间，使用当前姿态的 WXYZ 四元数，
   将连续 `total_yaw` 和 `pitch` 转为度，角速度使用机体系 `gyro.z/gyro.y`（rad/s）。
   不再把旧机器人的 roll 当作 pitch。遥测 `mode` 保持 1，`reset_tracker` 保持 false；
   时间戳与序号沿用源姿态，读取缓存不产生新的观测。
-- TaskGimbal 只发布有效遥测；尚未接入 `vision_feedback` 时不会发送占位数据。
+- TaskInput 只发布有效遥测；所需裁判数据尚未取得时不会发送占位数据。
   TX 首次取得有效快照后保留最后一份数据并重复发送，包括后续传感器间断和 USB 重连；
   这是参考协议的保留行为，44 字节线上报文没有陈旧标志。业务若需停止发送可发布 `valid = false`。
 - 发送线程先读取本地副本，再编码和 `write()`，不会在 USB 等待期间持有消息锁。
@@ -152,8 +178,12 @@ cmake --build --preset h723_mc02
 
 测试脚本需要已配置的固件编译数据库和本机 g++；可通过 `-Compiler`、`-CompileDatabase` 指定路径。
 覆盖遥控边沿、累计事件、串级 PID/前馈、Pitch 限位、视觉开火许可、热量/卡弹、
-两条控制链独立失效、遥测坐标/单位转换与毫秒计数回绕。主机测试用最小 HAL 时钟声明替代
-芯片寄存器头；USB/ThreadX 链接桩一旦被调用即失败，不模拟或验证实际 USB 传输。
+两条控制链独立失效、遥测坐标/单位转换与毫秒计数回绕。控制超时测试使用独立的 50 ms 参数，
+不改变机器人当前关闭电机快照超时的设置。
+脚本同时运行 `input_test.cpp`：使用真实 Input 循环和 msg 复制，验证源时间戳、遥控映射、
+裁判统一在线状态、启动缺包、批量发射事件和遥测生成；可用 `-Suite control/input` 单独运行。
+主机测试用最小 HAL 声明替代芯片寄存器头；Input 测试替代时钟、mutex 和 referee 数据源，
+不模拟调度、锁竞争或 UART 解析。其余运行时桩被调用即失败，不验证实际 USB 传输。
 协议脚本仅依赖主机 g++，覆盖分片/粘包、CRC/非有限数拒收、重新同步、固定布局和 fast-math 编译。
 USB 枚举、收发、部分写、主机停读、拔插恢复及新旧坐标方向仍需上板验证。
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "protocol.hpp"
+#include "vision_protocol.hpp"
 #include "control/control.hpp"
 #include "msg.hpp"
 
@@ -19,7 +19,7 @@ struct telemetry_sample
 inline msg::topic<target> targets;
 inline msg::topic<telemetry_sample> telemetry;
 
-// Pure conversion of a coherent Gimbal-cycle snapshot. Angles on the wire are degrees;
+// Pure conversion of a TaskInput snapshot. Angles on the wire are degrees;
 // quaternion and body gyro use the current gimbal frame, without the old robot's mounting map.
 // Timestamp and sequence identify the source attitude. Invalid inputs produce valid == false.
 telemetry_sample make_telemetry(const gimbal_input& input);

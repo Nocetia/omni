@@ -40,7 +40,7 @@ inline constexpr axis_params pitch_axis{};
 inline constexpr control_params control{remote, gimbal, shooter, chassis, 0.02f};
 inline constexpr thread_params gimbal_thread{4096, 4, 1};
 inline constexpr thread_params chassis_thread{4096, 4, 1};
-inline constexpr thread_params remote_thread{2048, 5, 1};
+inline constexpr thread_params input_thread{4096, 3, 1};
 inline constexpr thread_params vision_thread{2048, 11, 2};
 // Per USB transfer, in milliseconds. Bound host stalls independently of the control tasks.
 inline constexpr uint32_t vision_write_timeout_ms = 20;

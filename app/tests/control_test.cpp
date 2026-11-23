@@ -449,8 +449,8 @@ void test_remote()
     input.value.key.SHIFT = 1;
     ++input.sequence;
     output = controller.update(input, 0.01f);
-    check(near(output.chassis.wz, 3.0f) && near(output.chassis.vy, 2.0f),
-        "Legacy spin input enables rotation and excludes left-stick lateral movement");
+    check(near(output.chassis.wz, 3.0f) && near(output.chassis.vy, 1.5f),
+        "Spin retains combined keyboard and left-stick lateral movement");
     check(output.received_ms == 100, "Mapping preserves source age rather than refreshing it");
 
     input.sequence += 2;
@@ -469,6 +469,7 @@ void test_remote()
 void test_control_tasks()
 {
     cfg::control_params config{};
+    config.feedback_timeout_ms = 50;
     config.gimbal = gimbal_config();
     config.chassis = {0.1f, 0.2f, 100.0f};
     config.shooter.fric_speed = 100.0f;
@@ -649,7 +650,7 @@ void test_vision_telemetry()
     check(!vision::make_telemetry(input).valid, "Expired attitude cannot refresh telemetry");
     input.attitude.received_ms = 90;
     input.received_ms = 0;
-    check(!vision::make_telemetry(input).valid, "Expired robot snapshot cannot refresh telemetry");
+    check(vision::make_telemetry(input).valid, "Telemetry does not depend on motor snapshot age");
     input.now_ms = 5;
     input.received_ms = UINT32_MAX - 4;
     input.attitude.received_ms = UINT32_MAX - 4;

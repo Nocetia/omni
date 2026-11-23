@@ -32,7 +32,7 @@ namespace robot
             bool detect_color = false;
             float bullet_speed = 0.0f; // m/s
             uint16_t bullet_count = 0; // confirmed shots, not operator fire requests
-            // The input producer checks color, bullet-speed and shot-count availability/freshness.
+            // TaskInput checks referee online state and availability of color/bullet speed.
             bool valid = false;
         };
 
@@ -185,7 +185,7 @@ namespace robot
             float heat_limit = 0.0f;
             float cooling_rate = 0.0f;  // heat units/s, supplied by referee
             uint32_t heat_sequence = 0; // changes only when a new heat observation arrives
-            // The caller checks freshness of both heat and heat-limit packets each cycle.
+            // TaskInput checks referee online state and receipt of status/heat packets.
             bool heat_valid = false;
         };
 
@@ -314,7 +314,23 @@ namespace robot
         };
     } // namespace remote
 
-    // Input producers own snapshots; both control tasks own their own controller instances.
+    // Motor adapters publish these snapshots after updating device health in thread context.
+    struct gimbal_sample
+    {
+        uint32_t received_ms = 0;
+        gimbal::feedback gimbal{};
+        motor_feedback fric_left{};
+        motor_feedback fric_right{};
+        motor_feedback trigger{};
+    };
+
+    struct chassis_sample
+    {
+        uint32_t received_ms = 0;
+        chassis::feedback chassis{};
+    };
+
+    // TaskInput assembles snapshots; control tasks set their own now_ms/dt_s before updating.
     struct gimbal_input
     {
         uint32_t now_ms = 0;
@@ -376,10 +392,11 @@ namespace robot
         cfg::control_params config_;
     };
 
-    // Single writers: receiver adapter, Remote task, sensor adapters, then each control task.
+    // Single writers: receiver/motor adapters, TaskInput, then each control task.
     // msg copies under a mutex; no controller instance or motor object is shared by tasks.
     inline msg::topic<remote::input> remote_inputs;
-    inline msg::topic<remote::command> remote_commands;
+    inline msg::topic<gimbal_sample> gimbal_feedback;
+    inline msg::topic<chassis_sample> chassis_feedback;
     inline msg::topic<gimbal_input> gimbal_inputs;
     inline msg::topic<chassis_input> chassis_inputs;
     inline msg::topic<gimbal_output> gimbal_outputs;

@@ -64,10 +64,9 @@ telemetry_sample make_telemetry(const gimbal_input& input)
 {
     telemetry_sample sample;
     const auto& attitude = input.attitude;
-    const auto& feedback = input.vision_feedback;
+    const auto& feedback = input.vision_feedback;//referee_fdb更好
     if (!feedback.valid || !attitude.online || attitude.stage != imu::attitude::phase::running ||
-        uint32_t(input.now_ms - attitude.received_ms) > cfg::gimbal.attitude_timeout_ms ||
-        uint32_t(input.now_ms - input.received_ms) > cfg::control.feedback_timeout_ms)
+        uint32_t(input.now_ms - attitude.received_ms) > cfg::gimbal.attitude_timeout_ms)
     {
         return sample;
     }

@@ -89,7 +89,7 @@ struct control_params
     chassis_params chassis{};
     float max_dt_s = 0.02f;
     uint32_t command_timeout_ms = 100;
-    uint32_t feedback_timeout_ms = 50;
+    uint32_t feedback_timeout_ms = UINT32_MAX; // Motor snapshots only; referee owns its timeout.
 };
 
 struct thread_params

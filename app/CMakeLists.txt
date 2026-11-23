@@ -22,6 +22,6 @@ target_sources(app INTERFACE
 
     "${CMAKE_CURRENT_SOURCE_DIR}/robot/Task/TaskGimbal.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/robot/Task/TaskChassis.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/robot/Task/TaskRemoter.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/robot/Task/TaskInput.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/robot/Service/ServiceVision.cpp"
 )

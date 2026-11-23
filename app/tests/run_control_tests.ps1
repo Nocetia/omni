@@ -1,6 +1,8 @@
 param(
     [string]$Compiler = "C:/msys64/ucrt64/bin/g++.exe",
-    [string]$CompileDatabase = ""
+    [string]$CompileDatabase = "",
+    [ValidateSet("all", "control", "input")]
+    [string]$Suite = "all"
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,30 +50,45 @@ for ($i = 0; $i -lt $tokens.Count; ++$i)
 
 $build = Join-Path $repo "build/control-tests"
 New-Item -ItemType Directory -Path $build -Force | Out-Null
-$executable = Join-Path $build "control_test.exe"
-$sources = @("control", "remote", "axis", "gimbal", "shooter", "chassis") | ForEach-Object {
+$controlSources = @("control", "remote", "axis", "gimbal", "shooter", "chassis") | ForEach-Object {
     Join-Path $repo "app/robot/control/$_.cpp"
 }
-$sources += Join-Path $PSScriptRoot "control_test.cpp"
-$sources += Join-Path $repo "app/robot/Service/ServiceVision.cpp"
-$sources += Join-Path $PSScriptRoot "stubs/vision_runtime.cpp"
-# HAL register headers are unavailable on the host. Runtime USB/ThreadX stubs abort if called.
-$arguments = @("-std=c++17", "-O0", "-g", "-Wall", "-Wextra", "-Werror", "-static",
-    "-I" + (Join-Path $PSScriptRoot "stubs")) +
-    $flags + $sources + @("-o", $executable)
+$suites = @($Suite)
+if ($Suite -eq "all")
+{
+    $suites = @("control", "input")
+}
 
 Push-Location $entry.directory
 try
 {
-    & $Compiler @arguments
-    if ($LASTEXITCODE -ne 0)
+    foreach ($name in $suites)
     {
-        throw "Control test compilation failed with exit code $LASTEXITCODE."
-    }
-    & $executable
-    if ($LASTEXITCODE -ne 0)
-    {
-        throw "Control tests failed with exit code $LASTEXITCODE."
+        $executable = Join-Path $build "$($name)_test.exe"
+        $sources = @($controlSources)
+        $sources += Join-Path $repo "app/robot/Service/ServiceVision.cpp"
+        $sources += Join-Path $PSScriptRoot "$($name)_test.cpp"
+        if ($name -eq "input")
+        {
+            $sources += Join-Path $repo "app/robot/Task/TaskInput.cpp"
+        }
+        else
+        {
+            $sources += Join-Path $PSScriptRoot "stubs/vision_runtime.cpp"
+        }
+        $arguments = @("-std=c++17", "-O0", "-g", "-Wall", "-Wextra", "-Werror", "-static",
+            "-I" + (Join-Path $PSScriptRoot "stubs")) +
+            $flags + $sources + @("-o", $executable)
+        & $Compiler @arguments
+        if ($LASTEXITCODE -ne 0)
+        {
+            throw "$name test compilation failed with exit code $LASTEXITCODE."
+        }
+        & $executable
+        if ($LASTEXITCODE -ne 0)
+        {
+            throw "$name tests failed with exit code $LASTEXITCODE."
+        }
     }
 }
 finally
