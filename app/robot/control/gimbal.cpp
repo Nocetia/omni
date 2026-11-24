@@ -12,20 +12,6 @@ namespace
 {
 constexpr float min_pitch_cos = 0.01f; // Numerical guard for Euler-rate division.
 
-bool valid(const cfg::gimbal_params& config)
-{
-    //TODO: static_assert()
-    return config.attitude_timeout_ms > 0 && config.vision_timeout_ms > 0 &&
-           std::isfinite(config.yaw_rate_limit) && config.yaw_rate_limit > 0.0f &&
-           std::isfinite(config.pitch_rate_limit) && config.pitch_rate_limit > 0.0f &&
-           std::isfinite(config.pitch_min) && std::isfinite(config.pitch_max) &&
-           config.pitch_min < config.pitch_max && config.pitch_min > -math::pi / 2.0f &&
-           config.pitch_max < math::pi / 2.0f && std::isfinite(config.acquire_angle) &&
-           config.acquire_angle > 0.0f && config.acquire_angle <= math::pi &&
-           std::isfinite(config.aim_tolerance) && config.aim_tolerance > 0.0f &&
-           config.aim_tolerance <= config.acquire_angle;
-}
-
 bool read_axes(const imu::attitude::state& attitude, axis_state& yaw, axis_state& pitch)
 {
     // Invalid sensor values would poison the reference integrators and PID history.
@@ -95,9 +81,8 @@ bool valid(const motor_command& command)
 } // namespace
 
 controller::controller(axis_control& yaw, axis_control& pitch, const cfg::gimbal_params& config)
-    : config_(config), yaw_(yaw), pitch_(pitch), valid_(valid(config))
+    : config_(config), yaw_(yaw), pitch_(pitch)
 {
-    // Immutable limits are checked once; unset limits cannot enable an axis.
 }
 
 result controller::update(const command& command, const imu::attitude::state& attitude,
@@ -113,7 +98,7 @@ result controller::update(const command& command, const imu::attitude::state& at
         feedback.yaw.state == motor::state::online && feedback.pitch.state == motor::state::online;
     // A stale/calibrating IMU or offline actuator cannot support closed-loop control.
     // gimbal_control owns cycle-time and motor-snapshot freshness checks.
-    if (!command_valid || !valid_ || !attitude.online ||
+    if (!command_valid || !attitude.online ||
         attitude.stage != imu::attitude::phase::running ||
         now_ms - attitude.received_ms > config_.attitude_timeout_ms || !motors_online ||
         !read_axes(attitude, yaw, pitch))

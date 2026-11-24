@@ -25,6 +25,7 @@ struct ff_params
 
 struct shooter_params
 {
+    // Zero fric_speed, trigger_speed and shot_angle together disable the shooter.
     float fric_speed = 0.0f; // rad/s, left positive and right negative
     float fric_ready_ratio = 0.95f;
     float trigger_speed = 0.0f; // rad/s
@@ -75,7 +76,7 @@ struct axis_params
     pid_params pos{};
     pid_params vel{};
     ff_params ff{};
-    motor::mode mode = motor::mode::relax; // current or torque
+    motor::mode mode = motor::mode::relax; // relax disables the axis; otherwise current or torque
     float max_speed = 0.0f;                // rad/s
     float max_cmd = 0.0f;                  // raw current command or Nm, according to mode
     float direction = 1.0f;

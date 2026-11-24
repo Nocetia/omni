@@ -83,11 +83,6 @@ void test_axis()
     auto output = current.update({100.0f, 0.0f, 0.0f}, {}, 0.01f);
     check(output.mode == motor::mode::current && output.cmd.current == -5,
         "PID applies current saturation and motor direction");
-    config.max_cmd = 32768.0f;
-    gimbal::pid_axis invalid_current(config);
-    check(invalid_current.update({}, {}, 0.01f).mode == motor::mode::relax,
-        "PID rejects current limits outside int16 range");
-
     config.mode = motor::mode::torque;
     config.max_cmd = 20.0f;
     config.direction = 1.0f;

@@ -7,15 +7,6 @@ namespace robot::shooter
 {
 controller::controller(const cfg::shooter_params& config) : config_(config)
 {
-    // Unset speeds/step angles cannot define a shot; immutable parameters are checked once.
-    // TODO：static_assert()
-    valid_ = std::isfinite(config.fric_speed) && config.fric_speed > 0.0f &&
-             config.fric_ready_ratio > 0.0f && config.fric_ready_ratio <= 1.0f &&
-             std::isfinite(config.trigger_speed) && config.trigger_speed > 0.0f &&
-             std::isfinite(config.shot_angle) && config.shot_angle > 0.0f &&
-             std::isfinite(config.shot_timeout_s) && config.shot_timeout_s > 0.0f &&
-             std::isfinite(config.heat_per_shot) && config.heat_per_shot > 0.0f &&
-             std::isfinite(config.heat_margin) && config.heat_margin >= 0.0f;
 }
 
 output controller::update(const command& command, const feedback& feedback,
@@ -54,7 +45,7 @@ output controller::update(const command& command, const feedback& feedback,
                               std::isfinite(feedback.fric_right.fdb.velocity) &&
                               std::isfinite(feedback.trigger.fdb.position);
     // Speed readiness and feed progress are unusable if their motors are offline/invalid.
-    if (!command.enabled || !valid_ || !motors_valid)
+    if (!command.enabled || config_.fric_speed == 0.0f || !motors_valid)
     {
         active_ = false;
         shot_time_ = 0.0f;

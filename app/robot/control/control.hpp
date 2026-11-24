@@ -145,7 +145,6 @@ namespace robot
             axis_ref yaw_ref_{};
             axis_ref pitch_ref_{};
             gimbal::mode mode_ = gimbal::mode::off;
-            bool valid_ = false;
         };
 
         class pid_axis final : public axis_control
@@ -160,7 +159,6 @@ namespace robot
             cfg::axis_params config_;
             ::control::pid pos_;
             ::control::pid vel_;
-            bool valid_ = false;
         };
     } // namespace gimbal
 
@@ -208,7 +206,6 @@ namespace robot
 
         private:
             cfg::shooter_params config_;
-            bool valid_ = false;
             bool continuous_ = false;
             bool aim_required_ = false;
             bool active_ = false;
@@ -257,7 +254,6 @@ namespace robot
 
         private:
             cfg::chassis_params config_;
-            bool valid_ = false;
         };
     } // namespace chassis
 
@@ -310,7 +306,6 @@ namespace robot
             uint32_t session_ = 0;
             float keyboard_vx_ = 0.0f;
             float keyboard_vy_ = 0.0f;
-            bool valid_ = false;
         };
     } // namespace remote
 

@@ -7,23 +7,14 @@ namespace robot::chassis
 {
 controller::controller(const cfg::chassis_params& config) : config_(config)
 {
-    // Geometry is a divisor; zero/unset geometry and limits must not enable wheel output.
-    //static_assert()
-    valid_ = std::isfinite(config.wheel_radius_m) && config.wheel_radius_m > 0.0f &&
-             std::isfinite(config.radius_m) && config.radius_m > 0.0f &&
-             std::isfinite(config.max_wheel_speed) && config.max_wheel_speed > 0.0f;
-    for (const float direction : config.wheel_dir)
-    {
-        valid_ = valid_ && (direction == 1.0f || direction == -1.0f);
-    }
 }
 
 output controller::update(const command& command, const feedback& feedback)
 {
     output output{};
     // Nonfinite operator commands cannot be converted to meaningful wheel speeds.
-    if (!command.enabled || !valid_ || !std::isfinite(command.vx) || !std::isfinite(command.vy) ||
-        !std::isfinite(command.wz))
+    if (!command.enabled || config_.max_wheel_speed == 0.0f || !std::isfinite(command.vx) ||
+        !std::isfinite(command.vy) || !std::isfinite(command.wz))
     {
         return output;
     }

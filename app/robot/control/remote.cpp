@@ -7,23 +7,13 @@ namespace robot::remote
 {
 controller::controller(const cfg::remote_params& config) : config_(config)
 {
-    // Invalid thresholds could turn one wheel gesture into repeated shots; validate once.
-    //TODO: static_assert()
-    valid_ = std::isfinite(config.yaw_rate) && config.yaw_rate >= 0.0f &&
-             std::isfinite(config.pitch_rate) && config.pitch_rate >= 0.0f &&
-             std::isfinite(config.mouse_yaw) && std::isfinite(config.mouse_pitch) &&
-             std::isfinite(config.vx) && config.vx >= 0.0f && std::isfinite(config.vy) &&
-             config.vy >= 0.0f && std::isfinite(config.wz) &&
-             std::isfinite(config.keyboard_accel) && config.keyboard_accel >= 0.0f &&
-             config.deadband >= 0.0f && config.deadband < 1.0f && config.wheel_release >= 0.0f &&
-             config.wheel_release < config.wheel_trigger && config.wheel_trigger <= 1.0f;
 }
 
 command controller::update(const input& input, float dt_s)
 {
     const auto& value = input.value;
     // Link loss must clear toggles; invalid samples must not become motion or firing events.
-    if (!input.online || !valid_ || !std::isfinite(dt_s) || dt_s <= 0.0f ||
+    if (!input.online || !std::isfinite(dt_s) || dt_s <= 0.0f ||
         !std::isfinite(value.right_x) || !std::isfinite(value.right_y) ||
         !std::isfinite(value.left_x) || !std::isfinite(value.left_y) ||
         !std::isfinite(value.mouse_x) || !std::isfinite(value.mouse_y) ||

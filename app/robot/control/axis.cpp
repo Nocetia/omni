@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 
 namespace robot
 {
@@ -13,43 +12,21 @@ namespace
 constexpr auto pid_mode =
     ::control::pid_mode::position | ::control::pid_mode::derivative_on_measurement;
 
-    //TODO：static_assert()
-bool valid_pid(const cfg::pid_params& config, float limit)
-{
-    return std::isfinite(config.kp) && std::isfinite(config.ki) && std::isfinite(config.kd) &&
-           std::isfinite(config.max_iout) && config.max_iout >= 0.0f && config.max_iout <= limit;
-}
-
-bool valid_config(const cfg::axis_params& config)
-{
-    const bool current = config.mode == motor::mode::current;
-    const bool torque = config.mode == motor::mode::torque;
-    return (current || torque) && std::isfinite(config.max_speed) && config.max_speed > 0.0f &&
-           std::isfinite(config.max_cmd) && config.max_cmd > 0.0f &&
-           (!current || config.max_cmd <= std::numeric_limits<int16_t>::max()) &&
-           (config.direction == 1.0f || config.direction == -1.0f) &&
-           valid_pid(config.pos, config.max_speed) && valid_pid(config.vel, config.max_cmd) &&
-           std::isfinite(config.ff.lead_time_s) && config.ff.lead_time_s >= 0.0f &&
-           std::isfinite(config.ff.inertia) && std::isfinite(config.ff.damping) &&
-           std::isfinite(config.ff.gravity_gain) && std::isfinite(config.ff.cmd_per_torque);
-}
 } // namespace
 
 pid_axis::pid_axis(const cfg::axis_params& config)
     : config_(config),
       pos_(config.pos.kp, 0.0f, 0.0f, config.max_speed, config.pos.max_iout, pid_mode),
-      vel_(config.vel.kp, 0.0f, 0.0f, config.max_cmd, config.vel.max_iout, pid_mode),
-      valid_(valid_config(config))
+      vel_(config.vel.kp, 0.0f, 0.0f, config.max_cmd, config.vel.max_iout, pid_mode)
 {
-    // Bad gain/limit configuration cannot safely produce current or torque commands.
 }
 
 motor_command pid_axis::update(const axis_ref& ref, const axis_state& state, float dt_s)
 {
     // This replaceable adapter may be used on its own; protect PID history and dt division.
-    if (!valid_ || !std::isfinite(dt_s) || dt_s <= 0.0f || !std::isfinite(ref.pos) ||
-        !std::isfinite(ref.vel) || !std::isfinite(ref.acc) || !std::isfinite(state.pos) ||
-        !std::isfinite(state.vel) || !(ref.min_pos <= ref.max_pos))
+    if (config_.mode == motor::mode::relax || !std::isfinite(dt_s) || dt_s <= 0.0f ||
+        !std::isfinite(ref.pos) || !std::isfinite(ref.vel) || !std::isfinite(ref.acc) ||
+        !std::isfinite(state.pos) || !std::isfinite(state.vel) || !(ref.min_pos <= ref.max_pos))
     {
         reset(state);
         return {};
