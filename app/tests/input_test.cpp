@@ -77,7 +77,9 @@ void next_cycle()
 
             gimbal_sample motors{};
             motors.received_ms = 80;
+            motors.gimbal.yaw.state = motor::state::online;
             motors.gimbal.yaw.fdb.position = 1.25f;
+            motors.gimbal.yaw.fdb.velocity = -0.5f;
             motors.fric_left.fdb.velocity = 100.0f;
             gimbal_feedback.publish(motors);
             chassis_sample wheels{};
@@ -104,6 +106,10 @@ void next_cycle()
                       gimbal.shooter.fric_left.fdb.velocity == 100.0f &&
                       chassis.chassis.wheel_rf.fdb.velocity == 12.0f,
                 "Motor values and source acquisition times reach their control inputs");
+            check(chassis.yaw_received_ms == 80 &&
+                      chassis.yaw.state == motor::state::online &&
+                      chassis.yaw.fdb.position == 1.25f && chassis.yaw.fdb.velocity == -0.5f,
+                "Chassis receives yaw feedback with its original gimbal snapshot timestamp");
             check(gimbal.vision.sequence == 7 && gimbal.vision.received_ms == 90 &&
                       gimbal.vision.yaw == 0.5f,
                 "Input preserves vision target sequence, timestamp and units");
@@ -155,6 +161,7 @@ void next_cycle()
             check(gimbal.shooter.heat_sequence == 8 && gimbal.vision_feedback.bullet_count == 3,
                 "Repeated reads do not create heat observations or shot events");
             check(gimbal.received_ms == 80 && chassis.received_ms == 75 &&
+                      chassis.yaw_received_ms == 80 &&
                       gimbal.vision.received_ms == 90,
                 "Repeated aggregation never refreshes source timestamps");
             check(!gimbal.remote.armed && !chassis.remote.armed,

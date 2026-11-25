@@ -223,6 +223,30 @@ namespace robot
 
     namespace chassis
     {
+        enum class mode : uint8_t
+        {
+            follow,
+            decoupled,
+        };
+
+        enum class head : uint8_t
+        {
+            front,
+            rear,
+        };
+
+        struct request
+        {
+            bool enabled = false;
+            // Gimbal/view frame: x forward, y left. Converted by chassis_control.
+            float vx = 0.0f; // m/s
+            float vy = 0.0f; // m/s
+            float wz = 0.0f; // rad/s, used only in decoupled mode (including spin)
+            chassis::mode mode = chassis::mode::follow;
+            chassis::head head = chassis::head::front;
+            bool ifturn = false; // One-cycle R request; 180-degree turn is not implemented yet.
+        };
+
         struct command
         {
             bool enabled = false;
@@ -230,10 +254,6 @@ namespace robot
             float vx = 0.0f; // m/s
             float vy = 0.0f; // m/s
             float wz = 0.0f; // rad/s
-            bool ifspin = false;
-            bool ifturn = false; // One-cycle R request; 180-degree turn is not implemented yet.
-            // Held SHIFT request; chassis/gimbal decoupling is not implemented yet.
-            bool ifgimbalonly = false;
         };
 
         struct feedback
@@ -280,7 +300,7 @@ namespace robot
             bool armed = false;
             gimbal::command gimbal{};
             shooter::command shooter{};
-            chassis::command chassis{};
+            chassis::request chassis{};
             // Cumulative events survive latest-value delivery between different task rates.
             float mouse_yaw = 0.0f;
             float mouse_pitch = 0.0f;
@@ -366,6 +386,8 @@ namespace robot
         uint32_t received_ms = 0; // wheel snapshot acquisition time
         remote::command remote{};
         chassis::feedback chassis{};
+        motor_feedback yaw{};
+        uint32_t yaw_received_ms = 0; // yaw motor snapshot acquisition time
     };
 
     class gimbal_control

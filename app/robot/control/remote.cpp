@@ -87,7 +87,11 @@ command controller::update(const input& input, float dt_s)
             {
                 high_frequency_ = !high_frequency_;
             }
-            turn_requested = value.key.R && !previous_.key.R;
+            if (value.key.C && !previous_.key.C)
+            {
+                roll_enabled_ = !roll_enabled_;
+            }
+            turn_requested = value.key.R && !previous_.key.R;//++防止没判别到
 #endif
 
             const float wheel = std::abs(value.wheel);
@@ -135,11 +139,13 @@ command controller::update(const input& input, float dt_s)
     const bool auto_fire = autoaim && value.key.CTRL;
     const bool manual_fire = value.mouse_left && !auto_fire;
     const bool spin = spin_enabled_;
+    const bool decoupled = spin || value.key.SHIFT;
 #else
     const bool autoaim = autoaim_;
     const bool auto_fire = autoaim_;
     const bool manual_fire = false;
     const bool spin = value.left_sw == remotes::sw_state::up;
+    const bool decoupled = spin || value.left_sw == remotes::sw_state::low;
 #endif
 
     output.armed = true;
@@ -170,10 +176,9 @@ command controller::update(const input& input, float dt_s)
     output.chassis.vx = std::clamp(vx, -config_.vx, config_.vx);
     output.chassis.vy = std::clamp(vy, -config_.vy, config_.vy);
     output.chassis.wz = spin ? config_.wz : 0.0f;
+    output.chassis.mode = decoupled ? chassis::mode::decoupled : chassis::mode::follow;
 #if KEYBOARD_CONTROL
-    output.chassis.ifspin = spin;
     output.chassis.ifturn = turn_requested;
-    output.chassis.ifgimbalonly = value.key.SHIFT;
 #endif
     output.mouse_yaw = mouse_yaw_;
     output.mouse_pitch = mouse_pitch_;

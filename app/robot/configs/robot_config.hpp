@@ -27,7 +27,17 @@ inline constexpr pid_params yaw_spd_pid{0.5f, 0.0f, 0.0f, 0.0f};
 inline constexpr ff_params yaw_ff{0.02f, 0.0001f, 0.0001f, 0, 0.0001f};
 inline constexpr float yaw_cmd_limit = 100.0f;
 
-inline constexpr chassis_params chassis{0.035f, 0.2f};
+inline constexpr chassis_params chassis{
+    0.035f,                    // wheel_radius_m
+    0.2f,                      // radius_m
+    0.0f,                      // max_wheel_speed; fill before enabling output
+    {1.0f, 1.0f, 1.0f, 1.0f},  // wheel_dir: lf, lb, rf, rb
+    0.0f,                      // yaw_front: replace with measured motor position, rad
+    math::pi,                  // yaw_rear: replace with measured motor position, rad
+    1.0f,                      // yaw_direction: +1 or -1
+    0.0f,                      // follow_kp: fill after confirming yaw_direction
+    0.0f,                      // follow_max_wz: rad/s
+};
 
 // Fill measured limits and tuned gains before enabling actuator output.
 inline constexpr remote_params remote{};

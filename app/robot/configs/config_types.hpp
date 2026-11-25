@@ -1,6 +1,7 @@
 #pragma once
 
 #include "motor.hpp"
+#include "constants.hpp"
 
 #include <cstdint>
 
@@ -41,6 +42,12 @@ struct chassis_params
     float radius_m = 0.0f;                      // chassis centre to wheel contact, square X-drive
     float max_wheel_speed = 0.0f;               // rad/s, zero disables output
     float wheel_dir[4]{1.0f, 1.0f, 1.0f, 1.0f}; // lf, lb, rf, rb
+    // Yaw motor feedback positions when aligned with each physical chassis head, rad.
+    float yaw_front = 0.0f;
+    float yaw_rear = math::pi;
+    float yaw_direction = 1.0f; // +1 or -1: positive relative yaw is counter-clockwise
+    float follow_kp = 0.0f;     // (rad/s)/rad
+    float follow_max_wz = 0.0f; // rad/s, nonnegative
 };
 
 struct remote_params

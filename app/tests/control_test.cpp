@@ -368,6 +368,158 @@ void test_chassis()
         "Nonfinite chassis command cannot reach wheel output");
 }
 
+void test_chassis_modes()
+{
+    cfg::control_params config{};
+    config.feedback_timeout_ms = 50;
+    config.chassis = {0.1f, 0.2f, 100.0f};
+    config.chassis.yaw_front = 0.3f;
+    config.chassis.yaw_rear = -2.7f;
+    config.chassis.follow_kp = 2.0f;
+    config.chassis.follow_max_wz = 1.5f;
+    chassis_control controller(config);
+    chassis::controller kinematics(config.chassis);
+    chassis_input input{};
+    input.now_ms = 100;
+    input.received_ms = 100;
+    input.yaw_received_ms = 100;
+    input.dt_s = 0.01f;
+    input.remote.armed = true;
+    input.remote.received_ms = 100;
+    input.remote.chassis.enabled = true;
+    input.yaw.state = motor::state::online;
+    input.chassis.wheel_lf.state = motor::state::online;
+    input.chassis.wheel_lb.state = motor::state::online;
+    input.chassis.wheel_rf.state = motor::state::online;
+    input.chassis.wheel_rb.state = motor::state::online;
+
+    const auto matches = [&](const chassis::output& actual, float vx, float vy, float wz)
+    {
+        const auto expected = kinematics.update({true, vx, vy, wz}, input.chassis);
+        return actual.wheel_lf.mode == motor::mode::vel &&
+               near(actual.wheel_lf.cmd.velocity, expected.wheel_lf.cmd.velocity) &&
+               near(actual.wheel_lb.cmd.velocity, expected.wheel_lb.cmd.velocity) &&
+               near(actual.wheel_rf.cmd.velocity, expected.wheel_rf.cmd.velocity) &&
+               near(actual.wheel_rb.cmd.velocity, expected.wheel_rb.cmd.velocity);
+    };
+    input.yaw.fdb.position = config.chassis.yaw_front;
+    check(matches(controller.update(input), 0.0f, 0.0f, 0.0f),
+        "Front calibration is the follow zero");
+    input.yaw.fdb.position += 0.2f;
+    check(matches(controller.update(input), 0.0f, 0.0f, 0.4f),
+        "Positive relative yaw commands counter-clockwise follow");
+    input.yaw.fdb.position = config.chassis.yaw_front - 0.2f;
+    check(matches(controller.update(input), 0.0f, 0.0f, -0.4f),
+        "Negative relative yaw commands clockwise follow");
+    input.yaw.fdb.position = config.chassis.yaw_front + 2.0f * pi + 0.2f;
+    check(matches(controller.update(input), 0.0f, 0.0f, 0.4f),
+        "Continuous yaw feedback follows the shortest wrapped error");
+    input.yaw.fdb.position = config.chassis.yaw_front + 2.0f;
+    check(matches(controller.update(input), 0.0f, 0.0f, 1.5f),
+        "Follow angular speed respects its configured limit");
+    input.remote.chassis.head = chassis::head::rear;
+    input.yaw.fdb.position = config.chassis.yaw_rear;
+    check(matches(controller.update(input), 0.0f, 0.0f, 0.0f),
+        "Rear uses its independently calibrated zero rather than front plus pi");
+    input.yaw.fdb.position += 0.2f;
+    check(matches(controller.update(input), 0.0f, 0.0f, 0.4f),
+        "Rear follow keeps the same physical angular-speed convention");
+
+    input.remote.chassis.mode = chassis::mode::decoupled;
+    input.remote.chassis.wz = 3.0f;
+    check(matches(controller.update(input), 0.0f, 0.0f, 3.0f),
+        "Decoupled spin uses requested angular speed without adding follow");
+    input.remote.chassis.wz = 0.0f;
+    input.remote.chassis.vx = 1.0f;
+    struct translation_case
+    {
+        float theta;
+        float vx;
+        float vy;
+    };
+    constexpr translation_case translations[] = {
+        {0.0f, 1.0f, 0.0f}, {pi / 2.0f, 0.0f, 1.0f},
+        {-pi / 2.0f, 0.0f, -1.0f}, {pi, -1.0f, 0.0f}};
+    for (const auto& test : translations)
+    {
+        input.yaw.fdb.position = config.chassis.yaw_front + test.theta;
+        check(matches(controller.update(input), test.vx, test.vy, 0.0f),
+            "View-forward translation rotates into the fixed chassis frame");
+    }
+    input.yaw.fdb.position = config.chassis.yaw_front + pi / 2.0f;
+    input.remote.chassis.vy = 0.5f;
+    check(matches(controller.update(input), -0.5f, 1.0f, 0.0f),
+        "View-left translation uses the same yaw rotation as view-forward");
+
+    config.chassis.yaw_direction = -1.0f;
+    chassis_control reversed(config);
+    input.remote.chassis.vx = 0.0f;
+    input.remote.chassis.vy = 0.0f;
+    input.remote.chassis.mode = chassis::mode::follow;
+    input.remote.chassis.head = chassis::head::front;
+    input.yaw.fdb.position = config.chassis.yaw_front + 0.2f;
+    check(matches(reversed.update(input), 0.0f, 0.0f, -0.4f),
+        "Yaw installation direction corrects follow polarity");
+    input.remote.chassis.mode = chassis::mode::decoupled;
+    input.remote.chassis.vx = 1.0f;
+    input.yaw.fdb.position = config.chassis.yaw_front + pi / 2.0f;
+    check(matches(reversed.update(input), 0.0f, -1.0f, 0.0f),
+        "Yaw installation direction also corrects view-frame translation");
+    input.yaw_received_ms = 49;
+    check(controller.update(input).wheel_lf.mode == motor::mode::relax,
+        "Fresh wheels cannot hide stale yaw feedback");
+    input.yaw_received_ms = 100;
+    input.yaw.state = motor::state::offline;
+    check(controller.update(input).wheel_lf.mode == motor::mode::relax,
+        "Offline yaw feedback cannot drive view-frame translation");
+}
+
+void test_decoupled_yaw_hold()
+{
+    cfg::control_params config{};
+    config.gimbal = gimbal_config();
+    cfg::axis_params axis{};
+    axis.pos.kp = 2.0f;
+    axis.vel.kp = 3.0f;
+    axis.mode = motor::mode::torque;
+    axis.max_speed = 10.0f;
+    axis.max_cmd = 50.0f;
+    gimbal::pid_axis yaw(axis);
+    recording_axis pitch;
+    gimbal_control controller(yaw, pitch, config);
+    gimbal_input input{};
+    input.now_ms = 100;
+    input.received_ms = 100;
+    input.dt_s = 0.01f;
+    input.remote.armed = true;
+    input.remote.received_ms = 100;
+    input.remote.session = 1;
+    input.remote.gimbal.mode = gimbal::mode::manual;
+    input.remote.chassis = {true, 1.0f, 0.0f, 0.0f};
+    input.attitude.online = true;
+    input.attitude.stage = imu::attitude::phase::running;
+    input.attitude.received_ms = 100;
+    input.attitude.total_yaw = 1.0f;
+    input.gimbal.yaw.state = motor::state::online;
+    input.gimbal.pitch.state = motor::state::online;
+    check(near(controller.update(input).gimbal.yaw.cmd.torque, 0.0f),
+        "Gimbal starts holding its measured world yaw");
+
+    input.remote.chassis.mode = chassis::mode::decoupled;
+    input.remote.chassis.wz = 3.0f;
+    input.attitude.total_yaw = 1.2f;
+    check(near(controller.update(input).gimbal.yaw.cmd.torque, -1.2f),
+        "Entering decoupled spin retains yaw reference and opposes positive world yaw drift");
+    input.attitude.total_yaw = 0.8f;
+    check(near(controller.update(input).gimbal.yaw.cmd.torque, 1.2f),
+        "Decoupled yaw hold also opposes negative world yaw drift");
+    input.remote.chassis.mode = chassis::mode::follow;
+    input.remote.chassis.wz = 0.0f;
+    input.attitude.total_yaw = 1.1f;
+    check(near(controller.update(input).gimbal.yaw.cmd.torque, -0.6f),
+        "Returning to follow preserves the same world yaw reference");
+}
+
 void test_remote()
 {
     cfg::remote_params config{};
@@ -460,7 +612,7 @@ void test_remote()
 #endif
 #if KEYBOARD_CONTROL
     check(output.chassis.vx > 0.0f && output.chassis.vy > 0.0f,
-        "W/A move forward/left in the documented chassis frame");
+        "W/A move forward/left in the gimbal view frame");
 #else
     check(near(output.chassis.vx, 0.5f) && near(output.chassis.vy, -0.5f),
         "Disabled keyboard control ignores W/A and preserves left-stick signs");
@@ -469,12 +621,13 @@ void test_remote()
     ++input.sequence;
     output = controller.update(input, 0.01f);
 #if KEYBOARD_CONTROL
-    check(near(output.chassis.wz, 0.0f) && !output.chassis.ifspin &&
-              output.chassis.ifgimbalonly && near(output.chassis.vy, 1.5f),
-        "Keyboard SHIFT requests held gimbal-only mode without enabling spin");
+    check(near(output.chassis.wz, 0.0f) &&
+              output.chassis.mode == chassis::mode::decoupled && near(output.chassis.vy, 1.5f),
+        "Keyboard SHIFT requests decoupled translation without enabling spin");
 #else
     check(near(output.chassis.vx, 0.5f) && near(output.chassis.vy, -0.5f) &&
-              near(output.chassis.wz, 0.0f) && !output.chassis.ifgimbalonly,
+              near(output.chassis.wz, 0.0f) &&
+              output.chassis.mode == chassis::mode::decoupled,
         "Disabled keyboard control ignores held SHIFT and keyboard translation");
 #endif
     check(output.received_ms == 100, "Mapping preserves source age rather than refreshing it");
@@ -483,8 +636,13 @@ void test_remote()
     input.value.left_sw = remotes::sw_state::up;
     ++input.sequence;
     output = controller.update(input, 0.01f);
-    check(near(output.chassis.wz, 3.0f),
-        "Left switch up preserves legacy chassis spin when keyboard control is disabled");
+    check(near(output.chassis.wz, 3.0f) && output.chassis.mode == chassis::mode::decoupled,
+        "Left switch up spins with chassis follow disabled");
+    input.value.left_sw = remotes::sw_state::mid;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(near(output.chassis.wz, 0.0f) && output.chassis.mode == chassis::mode::follow,
+        "Left switch middle selects follow without spin");
     input.value.left_sw = remotes::sw_state::low;
     input.value.button = false;
     input.value.key.SHIFT = 0;
@@ -504,8 +662,8 @@ void test_remote()
     check(output.armed && output.gimbal.mode == gimbal::mode::manual &&
               !output.gimbal.aim_rune && !output.shooter.fire &&
               !output.shooter.continuous && !output.shooter.aim_required &&
-              !output.shooter.high_frequency && !output.chassis.ifspin &&
-              !output.chassis.ifturn && !output.chassis.ifgimbalonly &&
+              !output.shooter.high_frequency &&
+              output.chassis.mode == chassis::mode::decoupled && !output.chassis.ifturn &&
               near(output.chassis.vx, 0.5f) && near(output.chassis.vy, -0.5f) &&
               near(output.chassis.wz, 0.0f) && near(output.mouse_yaw, 0.0f) &&
               near(output.mouse_pitch, 0.0f),
@@ -542,8 +700,8 @@ void test_keyboard_remote()
     input.value.pause = true;
     ++input.sequence;
     auto output = controller.update(input, 0.01f);
-    check(output.armed && output.shooter.high_frequency && !output.chassis.ifspin &&
-              !output.chassis.ifturn && !output.chassis.ifgimbalonly &&
+    check(output.armed && output.shooter.high_frequency &&
+              output.chassis.mode == chassis::mode::follow && !output.chassis.ifturn &&
               !output.gimbal.aim_rune,
         "Keyboard session starts in high-frequency mode with requests cleared");
 
@@ -568,13 +726,13 @@ void test_keyboard_remote()
     input.value.key.Q = 1;
     ++input.sequence;
     output = controller.update(input, 0.01f);
-    check(output.chassis.ifspin && near(output.chassis.wz, 3.0f),
-        "Q press toggles spin on");
+    check(output.chassis.mode == chassis::mode::decoupled && near(output.chassis.wz, 3.0f),
+        "Q press toggles spin on and automatically decouples");
     output = controller.update(input, 0.01f);
-    check(output.chassis.ifspin && near(output.chassis.wz, 3.0f),
+    check(output.chassis.mode == chassis::mode::decoupled && near(output.chassis.wz, 3.0f),
         "Cached Q press cannot toggle spin twice");
     ++input.sequence;
-    check(controller.update(input, 0.01f).chassis.ifspin,
+    check(near(controller.update(input, 0.01f).chassis.wz, 3.0f),
         "Held Q on a fresh frame cannot toggle spin twice");
     input.value.key.Q = 0;
     ++input.sequence;
@@ -582,26 +740,28 @@ void test_keyboard_remote()
     input.value.key.Q = 1;
     ++input.sequence;
     output = controller.update(input, 0.01f);
-    check(!output.chassis.ifspin && near(output.chassis.wz, 0.0f),
-        "Next Q press toggles spin off");
+    check(output.chassis.mode == chassis::mode::follow && near(output.chassis.wz, 0.0f),
+        "Next Q press toggles spin off and restores follow");
 
     input.value.key.Q = 0;
     input.value.left_sw = remotes::sw_state::up;
     ++input.sequence;
     output = controller.update(input, 0.01f);
-    check(!output.chassis.ifspin && near(output.chassis.wz, 0.0f),
+    check(output.chassis.mode == chassis::mode::follow && near(output.chassis.wz, 0.0f),
         "Keyboard spin follows the Q toggle rather than the remote switch");
     input.value.left_sw = remotes::sw_state::low;
     input.value.key.SHIFT = 1;
+    input.value.key.W = 1;
     ++input.sequence;
     output = controller.update(input, 0.01f);
-    check(output.chassis.ifgimbalonly && !output.chassis.ifspin &&
-              near(output.chassis.wz, 0.0f),
-        "Held SHIFT requests gimbal-only mode independently of spin");
+    check(output.chassis.mode == chassis::mode::decoupled &&
+              near(output.chassis.wz, 0.0f) && near(output.chassis.vx, 2.0f),
+        "Held SHIFT decouples without stopping translation or requesting spin");
     input.value.key.SHIFT = 0;
+    input.value.key.W = 0;
     ++input.sequence;
-    check(!controller.update(input, 0.01f).chassis.ifgimbalonly,
-        "Releasing SHIFT clears gimbal-only mode");
+    check(controller.update(input, 0.01f).chassis.mode == chassis::mode::follow,
+        "Releasing SHIFT restores follow");
 
     input.value.key.R = 1;
     ++input.sequence;
@@ -705,7 +865,7 @@ void test_control_tasks()
     input.remote.gimbal.mode = gimbal::mode::manual;
     input.remote.gimbal.roll_enabled = true;
     input.remote.shooter.enabled = true;
-    input.remote.chassis = {true, 1.0f, 0.0f, 0.0f, false, false, false};
+    input.remote.chassis = {true, 1.0f, 0.0f, 0.0f};
     input.attitude.online = true;
     input.attitude.stage = imu::attitude::phase::running;
     input.attitude.received_ms = 100;
@@ -738,6 +898,8 @@ void test_control_tasks()
     chassis_input wheels{};
     wheels.now_ms = 100;
     wheels.received_ms = 100;
+    wheels.yaw_received_ms = 100;
+    wheels.yaw.state = motor::state::online;
     wheels.dt_s = 0.01f;
     wheels.remote = input.remote;
     wheels.chassis.wheel_lf.state = motor::state::online;
@@ -896,6 +1058,8 @@ int main()
     test_gimbal();
     test_shooter();
     test_chassis();
+    test_chassis_modes();
+    test_decoupled_yaw_hold();
     test_remote();
 #if KEYBOARD_CONTROL
     test_keyboard_remote();

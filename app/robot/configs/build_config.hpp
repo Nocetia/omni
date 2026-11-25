@@ -7,3 +7,7 @@
 #ifndef KEYBOARD_CONTROL
 #define KEYBOARD_CONTROL 0
 #endif
+
+#ifndef CHASSIS_MOVE
+#define CHASSIS_MOVE 0
+#endif

@@ -108,6 +108,8 @@ void input_thread_entry(ULONG)
         chassis.remote = command;
         chassis.received_ms = chassis_motors.received_ms;
         chassis.chassis = chassis_motors.chassis;
+        chassis.yaw = gimbal_motors.gimbal.yaw;
+        chassis.yaw_received_ms = gimbal_motors.received_ms;
         update_referee(gimbal, referee_data);
         gimbal.now_ms = HAL_GetTick();
 

@@ -21,7 +21,8 @@ referee::read() ─────────────────────�
 - `gimbal_control::update(gimbal_input)` 返回 `gimbal_output`，包含云台、发射命令和瞄准状态。
   Shooter 使用本周期的 `gimbal::status`，不会读取另一个线程或上一周期的瞄准结果。
 - `chassis_control::update(chassis_input)` 独立返回 `chassis::output`，不依赖云台输出。
-  当前实现正方形 X 型全向轮逆运动学、统一比例限速及安装方向转换；轮速闭环和功率限制尚未接入。
+  使用 Yaw 电机机械角度实现 P 跟随、解耦和视角平移转换，再调用正方形 X 型全向轮逆运动学。
+  轮速统一比例限速及安装方向转换已实现；轮速闭环和功率限制尚未接入。
 - `remote::controller` 仅由 Input 任务持有，两个控制任务各自持有控制器实例和命令副本，
   不共享 PID 状态、电机对象，也不重复处理按键边沿。
 - `gimbal::controller` 通过两个非拥有的 `axis_control&` 调用 Yaw/Pitch 控制器；
@@ -43,27 +44,52 @@ referee::read() ─────────────────────�
 | 拨轮离开中位 | 手动单发一次；回中后才接受下次动作，自瞄时忽略 |
 | trigger（`reading.button`）按下沿 | 切换手动/自瞄 |
 | 右摇杆 | 手动 Yaw/Pitch 角速度 |
-| 左摇杆 | 平移；左拨杆上位进入旋转，旋转时仍保留平移输入 |
+| 左摇杆 | 按云台视角平移 |
+| 左拨杆 | 中位 Follow，下位 Decoupled，上位小陀螺（自动 Decoupled）；均保留平移 |
 
 将 `KEYBOARD_CONTROL` 设为 `1` 后，键鼠按下表映：
 
 | 输入 | 行为 |
 |---|---|
-| W/S、A/D | 前后、左右平移，与左摇杆叠加后限幅 |
+| W/S、A/D | 按云台视角前后、左右平移，与左摇杆叠加后限幅 |
 | 鼠标移动 | 产生新帧 Yaw/Pitch 位移 |
-| Q 按下沿 | 切换小陀螺，输出 `ifspin` 并设置旋转角速度 |
-| SHIFT 按住 | 输出 `ifgimbalonly`；底盘/云台解耦执行逻辑待接入 |
+| Q 按下沿 | 切换小陀螺；自动进入 Decoupled，旋转角速度为 `cfg::remote.wz` |
+| SHIFT 按住 | Decoupled；未开启小陀螺时底盘角速度为零，释放后恢复 Follow |
 | R 按下沿 | 输出一周期 `ifturn`；180° 换头尚未实现 |
 | F 按下沿 | 切换 `aim_rune`，打符模式的下游处理待接入 |
+| C 按下沿 | 切换 Roll 请求，与 fn1 相同；实际 Roll 输出待接入 |
 | X 按下沿 | 切换 `high_frequency`，解锁后初始为高弹频；速度选择待接入 |
 | 左键按住 | 请求持续手动开火，仍受摩擦轮、热量和拨弹保护限制 |
 | 右键按住 | 跟随自瞄；释放即回到手动云台 |
 | CTRL + 右键 | 跟随自瞄并允许自动开火，仍需满足视觉与发射安全门限 |
 | CTRL + Z | 进入 `relax`（锁存失能），需重新解锁 |
 
+键鼠默认底盘模式为 Follow；Q 开启时 SHIFT 的释放不会退出小陀螺，Q 关闭后按 SHIFT 状态选模式。
 底盘采用 x 向前、y 向左、wz 逆时针的坐标定义，因此 A/左移为正 y；
 旧下板报文中向右为正的数值符号不直接沿用。旧腿长、跳跃等异构底盘命令没有套到全向轮底盘上。
 旋转速度、键盘加速度及全部比例参数集中在 `cfg::remote`。
+
+### 底盘跟随与解耦
+
+`remote::command.chassis` 使用 `chassis::request`：`vx/vy` 是云台视角系速度，
+`mode` 为 `follow/decoupled`，`head` 选择 `front/rear`，`wz` 仅在 Decoupled 使用。
+`chassis::command` 只表示转换后的物理底盘系速度，底层轮速解算不处理模式。
+Front/Rear 仅选择跟随对齐零位，物理底盘坐标系和轮序不变。当前遥控默认 Front，
+Rear 可通过请求接口选择；R 保留现有占位请求，本版不执行一键换头。
+
+在 `robot/configs/robot_config.hpp` 的 `cfg::chassis` 填写 `yaw_front/yaw_rear`：
+两者都是云台分别对准物理车头/车尾时的 Yaw 电机反馈位置，单位 rad；当前 `0/π` 只是占位。
+`yaw_direction` 取 ±1，使云台相对底盘左转为正。`follow_kp` 单位为 (rad/s)/rad，
+`follow_max_wz` 单位为 rad/s；这两个参数暂为零，需填写后才产生跟随旋转。
+
+平移使用 `theta = wrap(yaw_direction * (yaw_position - yaw_front))` 转到底盘系，
+因此 Front、Rear 和小陀螺下 W 都沿云台视线方向。Follow 的角速度为
+`clamp(follow_kp * wrap(yaw_direction * (yaw_position - selected_zero)), ±follow_max_wz)`；
+Decoupled 直接使用请求的 `wz`，不叠加跟随输出。当前仅用 P，没有积分或切模式历史。
+
+云台 Yaw 仍由现有 IMU 世界角位置/速度闭环保持目标：无手动输入时底盘带动云台转动会产生
+反向修正输出，切换底盘模式不重置云台目标。这里要求 IMU 表示云台姿态、坐标方向正确；
+本版不额外叠加底盘旋转补偿。保持效果及 Front/Rear 零位仍需实机验证。
 
 自瞄开火必须同时满足视觉目标新鲜且可达、`vision.fire`、Yaw/Pitch 误差范围、摩擦轮到速和热量余量。
 手动单发也检查摩擦轮和热量；未满足条件的单发不排队等待。
@@ -87,6 +113,8 @@ referee::read() ─────────────────────�
   `chassis_feedback`（`chassis_sample`），每个 topic 仅一个写入者。
   输入发布者在任务上下文发布完整副本，不能在 ISR 使用依赖 mutex 的 `msg::topic`。
   `gimbal_sample` 仅含云台及三个发射电机反馈，裁判字段由 Input 填写。
+  Input 同时把 Yaw 电机反馈复制到 `chassis_input.yaw`，保留独立的 `yaw_received_ms`，
+  不用轮电机时间代替 Yaw 时间；两种底盘模式都需要这个机械角度来转换平移方向。
   Input 是 `gimbal_inputs/chassis_inputs` 的唯一写入者；两条控制任务只覆盖 `now_ms/dt_s`，
   分别按自身执行时间计算控制周期。`remote_commands` 已删除，映射结果直接放入完整输入。
 - `msg` 的 mutex 只保护快照复制，不跨越控制计算；忙时保留旧快照，由时间检查判断能否继续使用。

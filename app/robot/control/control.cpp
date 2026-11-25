@@ -1,5 +1,7 @@
 #include "control.hpp"
+#include "constants.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace robot
@@ -79,14 +81,37 @@ chassis_control::chassis_control(const cfg::control_params& config)
 
 chassis::output chassis_control::update(const chassis_input& input)
 {
-    // This task must stop independently if Remote or the wheel-feedback producer stalls.
+    // The yaw encoder is needed for both follow and view-frame translation.
     if (!input.remote.armed || !std::isfinite(input.dt_s) || input.dt_s <= 0.0f ||
         input.dt_s > config_.max_dt_s ||
         input.now_ms - input.remote.received_ms > config_.command_timeout_ms ||
-        input.now_ms - input.received_ms > config_.feedback_timeout_ms)
+        input.now_ms - input.received_ms > config_.feedback_timeout_ms ||
+        input.yaw.state != motor::state::online ||
+        input.now_ms - input.yaw_received_ms > config_.feedback_timeout_ms)
     {
         return {};
     }
-    return chassis_.update(input.remote.chassis, input.chassis);
+    const auto& request = input.remote.chassis;
+    const auto& config = config_.chassis;
+    const float theta = std::remainder(
+        config.yaw_direction * (input.yaw.fdb.position - config.yaw_front), math::two_pi);
+    const float cos_yaw = std::cos(theta);
+    const float sin_yaw = std::sin(theta);
+
+    chassis::command command{};
+    command.enabled = request.enabled;
+    command.vx = cos_yaw * request.vx - sin_yaw * request.vy;
+    command.vy = sin_yaw * request.vx + cos_yaw * request.vy;
+    command.wz = request.wz;
+    if (request.mode == chassis::mode::follow)
+    {
+        const float zero = request.head == chassis::head::front ? config.yaw_front : config.yaw_rear;
+        const float error = std::remainder(
+            config.yaw_direction * (input.yaw.fdb.position - zero), math::two_pi);
+        // Positive error means the gimbal is left of the selected head: turn the chassis left.
+        command.wz =
+            std::clamp(config.follow_kp * error, -config.follow_max_wz, config.follow_max_wz);
+    }
+    return chassis_.update(command, input.chassis);
 }
 } // namespace robot
