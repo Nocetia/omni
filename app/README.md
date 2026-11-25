@@ -32,6 +32,9 @@ referee::read() ─────────────────────�
 
 ### 遥控映射
 
+新键鼠映射由 `configs/build_config.hpp` 中的 `KEYBOARD_CONTROL` 控制，默认为 `0`。
+关闭时键盘、鼠标位移和鼠标按键不进入命令，仅保留遥控映射：
+
 | 输入 | 行为 |
 |---|---|
 | pause 按下沿 | 解锁/失能；重置摩擦轮、自瞄、Roll 请求 |
@@ -39,8 +42,24 @@ referee::read() ─────────────────────�
 | fn2 按下沿 | 切换摩擦轮 |
 | 拨轮离开中位 | 手动单发一次；回中后才接受下次动作，自瞄时忽略 |
 | trigger（`reading.button`）按下沿 | 切换手动/自瞄 |
-| 右摇杆、鼠标 | 沿用原来的 Yaw/Pitch 方向；摇杆是角速度，鼠标是新帧位移 |
-| WASD、左摇杆 | 平移；SHIFT 或左拨杆上位进入旋转，旋转时仍保留平移输入 |
+| 右摇杆 | 手动 Yaw/Pitch 角速度 |
+| 左摇杆 | 平移；左拨杆上位进入旋转，旋转时仍保留平移输入 |
+
+将 `KEYBOARD_CONTROL` 设为 `1` 后，键鼠按下表映：
+
+| 输入 | 行为 |
+|---|---|
+| W/S、A/D | 前后、左右平移，与左摇杆叠加后限幅 |
+| 鼠标移动 | 产生新帧 Yaw/Pitch 位移 |
+| Q 按下沿 | 切换小陀螺，输出 `ifspin` 并设置旋转角速度 |
+| SHIFT 按住 | 输出 `ifgimbalonly`；底盘/云台解耦执行逻辑待接入 |
+| R 按下沿 | 输出一周期 `ifturn`；180° 换头尚未实现 |
+| F 按下沿 | 切换 `aim_rune`，打符模式的下游处理待接入 |
+| X 按下沿 | 切换 `high_frequency`，解锁后初始为高弹频；速度选择待接入 |
+| 左键按住 | 请求持续手动开火，仍受摩擦轮、热量和拨弹保护限制 |
+| 右键按住 | 跟随自瞄；释放即回到手动云台 |
+| CTRL + 右键 | 跟随自瞄并允许自动开火，仍需满足视觉与发射安全门限 |
+| CTRL + Z | 进入 `relax`（锁存失能），需重新解锁 |
 
 底盘采用 x 向前、y 向左、wz 逆时针的坐标定义，因此 A/左移为正 y；
 旧下板报文中向右为正的数值符号不直接沿用。旧腿长、跳跃等异构底盘命令没有套到全向轮底盘上。
@@ -173,6 +192,7 @@ TaskInput → make_telemetry → vision::telemetry → Vision 线程 → USB TX
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File app/tests/run_control_tests.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File app/tests/run_control_tests.ps1 -KeyboardControl
 powershell -NoProfile -ExecutionPolicy Bypass -File app/tests/run_vision_tests.ps1
 cmake --build --preset h723_mc02
 ```

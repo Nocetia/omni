@@ -72,6 +72,7 @@ namespace robot
             float yaw_delta = 0.0f;
             float pitch_delta = 0.0f;
             bool roll_enabled = false; // fn1 request; roll actuator behaviour is not implemented yet.
+            bool aim_rune = false; // F toggle request; rune aiming is not implemented yet.
         };
 
         struct feedback
@@ -171,6 +172,8 @@ namespace robot
             bool continuous = false;
             bool aim_required = false;
             bool reverse = false;
+            // X toggle request; speed selection is not implemented yet.
+            bool high_frequency = false;
         };
 
         struct feedback
@@ -227,6 +230,10 @@ namespace robot
             float vx = 0.0f; // m/s
             float vy = 0.0f; // m/s
             float wz = 0.0f; // rad/s
+            bool ifspin = false;
+            bool ifturn = false; // One-cycle R request; 180-degree turn is not implemented yet.
+            // Held SHIFT request; chassis/gimbal decoupling is not implemented yet.
+            bool ifgimbalonly = false;
         };
 
         struct feedback
@@ -291,6 +298,8 @@ namespace robot
             void reset(const input& input);
 
         private:
+            void clear_session();
+
             cfg::remote_params config_;
             remotes::reading previous_{};
             uint32_t sequence_ = 0;
@@ -299,6 +308,9 @@ namespace robot
             bool fric_enabled_ = false;
             bool autoaim_ = false;
             bool roll_enabled_ = false;
+            bool spin_enabled_ = false;
+            bool aim_rune_ = false;
+            bool high_frequency_ = true;
             bool wheel_ready_ = false;
             float mouse_yaw_ = 0.0f;
             float mouse_pitch_ = 0.0f;

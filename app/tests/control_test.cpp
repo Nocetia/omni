@@ -1,4 +1,5 @@
 #include "control/control.hpp"
+#include "configs/build_config.hpp"
 #include "Service/vision.hpp"
 
 #include <cmath>
@@ -310,11 +311,11 @@ void test_shooter()
     feedback.trigger.state = motor::state::online;
     feedback.heat_limit = 100.0f;
     shooter::controller switching(config);
-    command = {true, true, true, true, false};
+    command = {true, true, true, true, false, false};
     aim = {true, true, true};
     check(switching.update(command, feedback, aim, 0.01f).trigger.cmd.velocity > 0.0f,
         "Automatic fire starts a feed step");
-    command = {true, false, false, false, false};
+    command = {true, false, false, false, false, false};
     check(near(switching.update(command, feedback, aim, 0.01f).trigger.cmd.velocity, 0.0f),
         "Leaving auto mode cancels the unfinished automatic feed step");
 }
@@ -406,12 +407,24 @@ void test_remote()
     output = controller.update(input, 0.01f);
     check(output.shooter.enabled && output.gimbal.roll_enabled,
         "fn2 toggles friction and fn1 exposes the roll request");
+#if KEYBOARD_CONTROL
     check(near(output.gimbal.yaw_rate, -1.0f) && near(output.gimbal.pitch_rate, 1.5f) &&
               near(output.mouse_yaw, -0.02f) && near(output.mouse_pitch, 0.06f),
         "Stick and mouse retain legacy yaw/pitch signs");
+#else
+    check(near(output.gimbal.yaw_rate, -1.0f) && near(output.gimbal.pitch_rate, 1.5f) &&
+              near(output.mouse_yaw, 0.0f) && near(output.mouse_pitch, 0.0f),
+        "Disabled keyboard control ignores mouse displacement but preserves right-stick signs");
+#endif
     const auto cached = controller.update(input, 0.01f);
+#if KEYBOARD_CONTROL
     check(near(cached.mouse_yaw, output.mouse_yaw) && cached.shooter.enabled,
         "Cached frame cannot accumulate mouse displacement or toggle fn2 again");
+#else
+    check(near(cached.mouse_yaw, 0.0f) && near(cached.mouse_pitch, 0.0f) &&
+              cached.shooter.enabled,
+        "Cached frame keeps disabled mouse input neutral and cannot toggle fn2 again");
+#endif
 
     input.value.mouse_x = 0.0f;
     input.value.mouse_y = 0.0f;
@@ -436,17 +449,68 @@ void test_remote()
     input.value.left_x = 0.25f;
     ++input.sequence;
     output = controller.update(input, 0.01f);
+#if KEYBOARD_CONTROL
+    check(output.gimbal.mode == gimbal::mode::autoaim && !output.shooter.fire &&
+              !output.shooter.aim_required && !output.shooter.continuous,
+        "Legacy trigger still toggles tracking without enabling keyboard auto fire");
+#else
     check(output.gimbal.mode == gimbal::mode::autoaim && output.shooter.aim_required &&
               output.shooter.continuous,
         "Trigger toggles autoaim with aim-gated continuous fire");
+#endif
+#if KEYBOARD_CONTROL
     check(output.chassis.vx > 0.0f && output.chassis.vy > 0.0f,
         "W/A move forward/left in the documented chassis frame");
+#else
+    check(near(output.chassis.vx, 0.5f) && near(output.chassis.vy, -0.5f),
+        "Disabled keyboard control ignores W/A and preserves left-stick signs");
+#endif
     input.value.key.SHIFT = 1;
     ++input.sequence;
     output = controller.update(input, 0.01f);
-    check(near(output.chassis.wz, 3.0f) && near(output.chassis.vy, 1.5f),
-        "Spin retains combined keyboard and left-stick lateral movement");
+#if KEYBOARD_CONTROL
+    check(near(output.chassis.wz, 0.0f) && !output.chassis.ifspin &&
+              output.chassis.ifgimbalonly && near(output.chassis.vy, 1.5f),
+        "Keyboard SHIFT requests held gimbal-only mode without enabling spin");
+#else
+    check(near(output.chassis.vx, 0.5f) && near(output.chassis.vy, -0.5f) &&
+              near(output.chassis.wz, 0.0f) && !output.chassis.ifgimbalonly,
+        "Disabled keyboard control ignores held SHIFT and keyboard translation");
+#endif
     check(output.received_ms == 100, "Mapping preserves source age rather than refreshing it");
+
+#if !KEYBOARD_CONTROL
+    input.value.left_sw = remotes::sw_state::up;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(near(output.chassis.wz, 3.0f),
+        "Left switch up preserves legacy chassis spin when keyboard control is disabled");
+    input.value.left_sw = remotes::sw_state::low;
+    input.value.button = false;
+    input.value.key.SHIFT = 0;
+    ++input.sequence;
+    controller.update(input, 0.01f);
+    input.value.button = true;
+    input.value.key.CTRL = 1;
+    input.value.key.Q = 1;
+    input.value.key.R = 1;
+    input.value.key.F = 1;
+    input.value.key.Z = 1;
+    input.value.key.X = 1;
+    input.value.mouse_left = true;
+    input.value.mouse_right = true;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.armed && output.gimbal.mode == gimbal::mode::manual &&
+              !output.gimbal.aim_rune && !output.shooter.fire &&
+              !output.shooter.continuous && !output.shooter.aim_required &&
+              !output.shooter.high_frequency && !output.chassis.ifspin &&
+              !output.chassis.ifturn && !output.chassis.ifgimbalonly &&
+              near(output.chassis.vx, 0.5f) && near(output.chassis.vy, -0.5f) &&
+              near(output.chassis.wz, 0.0f) && near(output.mouse_yaw, 0.0f) &&
+              near(output.mouse_pitch, 0.0f),
+        "Disabled keyboard control preserves the legacy mapping");
+#endif
 
     input.sequence += 2;
     check(!controller.update(input, 0.01f).armed,
@@ -460,6 +524,163 @@ void test_remote()
     check(!controller.update(input, 0.01f).armed,
         "Reconnection requires a fresh release/press of pause");
 }
+
+#if KEYBOARD_CONTROL
+void test_keyboard_remote()
+{
+    cfg::remote_params config{};
+    config.vx = 2.0f;
+    config.vy = 2.0f;
+    config.wz = 3.0f;
+    config.keyboard_accel = 1000.0f;
+    remote::controller controller(config);
+    remote::input input{};
+    input.online = true;
+    input.received_ms = 100;
+    input.sequence = 1;
+    controller.update(input, 0.01f);
+    input.value.pause = true;
+    ++input.sequence;
+    auto output = controller.update(input, 0.01f);
+    check(output.armed && output.shooter.high_frequency && !output.chassis.ifspin &&
+              !output.chassis.ifturn && !output.chassis.ifgimbalonly &&
+              !output.gimbal.aim_rune,
+        "Keyboard session starts in high-frequency mode with requests cleared");
+
+    input.value.pause = false;
+    input.value.key.W = 1;
+    input.value.key.A = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(near(output.chassis.vx, 2.0f) && near(output.chassis.vy, 2.0f),
+        "Keyboard W/A command forward and left translation");
+    input.value.key.W = 0;
+    input.value.key.A = 0;
+    input.value.key.S = 1;
+    input.value.key.D = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(near(output.chassis.vx, -2.0f) && near(output.chassis.vy, -2.0f),
+        "Keyboard S/D command backward and right translation");
+
+    input.value.key.S = 0;
+    input.value.key.D = 0;
+    input.value.key.Q = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.chassis.ifspin && near(output.chassis.wz, 3.0f),
+        "Q press toggles spin on");
+    output = controller.update(input, 0.01f);
+    check(output.chassis.ifspin && near(output.chassis.wz, 3.0f),
+        "Cached Q press cannot toggle spin twice");
+    ++input.sequence;
+    check(controller.update(input, 0.01f).chassis.ifspin,
+        "Held Q on a fresh frame cannot toggle spin twice");
+    input.value.key.Q = 0;
+    ++input.sequence;
+    controller.update(input, 0.01f);
+    input.value.key.Q = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(!output.chassis.ifspin && near(output.chassis.wz, 0.0f),
+        "Next Q press toggles spin off");
+
+    input.value.key.Q = 0;
+    input.value.left_sw = remotes::sw_state::up;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(!output.chassis.ifspin && near(output.chassis.wz, 0.0f),
+        "Keyboard spin follows the Q toggle rather than the remote switch");
+    input.value.left_sw = remotes::sw_state::low;
+    input.value.key.SHIFT = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.chassis.ifgimbalonly && !output.chassis.ifspin &&
+              near(output.chassis.wz, 0.0f),
+        "Held SHIFT requests gimbal-only mode independently of spin");
+    input.value.key.SHIFT = 0;
+    ++input.sequence;
+    check(!controller.update(input, 0.01f).chassis.ifgimbalonly,
+        "Releasing SHIFT clears gimbal-only mode");
+
+    input.value.key.R = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.chassis.ifturn, "R press emits a turn request");
+    check(!controller.update(input, 0.01f).chassis.ifturn,
+        "A cached R press cannot replay a turn request");
+    ++input.sequence;
+    check(!controller.update(input, 0.01f).chassis.ifturn,
+        "Held R emits the turn request for only one frame");
+
+    input.value.key.R = 0;
+    input.value.key.F = 1;
+    input.value.key.X = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.gimbal.aim_rune && !output.shooter.high_frequency,
+        "F and X presses toggle rune aim and low-frequency fire");
+    output = controller.update(input, 0.01f);
+    check(output.gimbal.aim_rune && !output.shooter.high_frequency,
+        "Cached F/X presses cannot toggle modes twice");
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.gimbal.aim_rune && !output.shooter.high_frequency,
+        "Held F/X on a fresh frame cannot toggle modes twice");
+    input.value.key.F = 0;
+    input.value.key.X = 0;
+    ++input.sequence;
+    controller.update(input, 0.01f);
+    input.value.key.F = 1;
+    input.value.key.X = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(!output.gimbal.aim_rune && output.shooter.high_frequency,
+        "Next F/X presses restore normal aim and high-frequency fire");
+
+    input.value.key.F = 0;
+    input.value.key.X = 0;
+    input.value.mouse_right = true;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.gimbal.mode == gimbal::mode::autoaim && !output.shooter.fire &&
+              !output.shooter.continuous && !output.shooter.aim_required,
+        "Held right mouse tracks autoaim without firing");
+    input.value.key.CTRL = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.gimbal.mode == gimbal::mode::autoaim && output.shooter.fire &&
+              output.shooter.continuous && output.shooter.aim_required,
+        "CTRL plus held right mouse requests aim-gated automatic fire");
+
+    input.value.key.CTRL = 0;
+    input.value.mouse_right = false;
+    input.value.mouse_left = true;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(output.gimbal.mode == gimbal::mode::manual && output.shooter.fire &&
+              output.shooter.continuous && !output.shooter.aim_required,
+        "Held left mouse requests ungated manual continuous fire");
+    output = controller.update(input, 0.01f);
+    check(output.shooter.fire && output.shooter.continuous &&
+              !output.shooter.aim_required,
+        "Cached held left mouse preserves manual continuous fire");
+
+    input.value.mouse_left = false;
+    input.value.key.CTRL = 1;
+    input.value.key.Z = 1;
+    ++input.sequence;
+    output = controller.update(input, 0.01f);
+    check(!output.armed && output.gimbal.mode == gimbal::mode::off &&
+              !output.shooter.enabled && !output.chassis.enabled,
+        "CTRL+Z latches the command into relax mode");
+    input.value.key.CTRL = 0;
+    input.value.key.Z = 0;
+    ++input.sequence;
+    check(!controller.update(input, 0.01f).armed,
+        "Releasing CTRL+Z does not leave relax mode");
+}
+#endif
 
 void test_control_tasks()
 {
@@ -484,7 +705,7 @@ void test_control_tasks()
     input.remote.gimbal.mode = gimbal::mode::manual;
     input.remote.gimbal.roll_enabled = true;
     input.remote.shooter.enabled = true;
-    input.remote.chassis = {true, 1.0f, 0.0f, 0.0f};
+    input.remote.chassis = {true, 1.0f, 0.0f, 0.0f, false, false, false};
     input.attitude.online = true;
     input.attitude.stage = imu::attitude::phase::running;
     input.attitude.received_ms = 100;
@@ -534,7 +755,7 @@ void test_control_tasks()
         "Stale wheel feedback stops chassis without blocking gimbal");
 
     input.remote.gimbal.mode = gimbal::mode::autoaim;
-    input.remote.shooter = {true, true, true, true, false};
+    input.remote.shooter = {true, true, true, true, false, false};
     input.vision.valid = true;
     input.vision.fire = true;
     input.vision.received_ms = 100;
@@ -568,7 +789,7 @@ void test_control_tasks()
     input.remote.mouse_yaw = 20.0f;
     input.remote.shots = 100;
     ++input.remote.session;
-    input.remote.shooter = {true, false, false, false, false};
+    input.remote.shooter = {true, false, false, false, false, false};
     output = gimbal.update(input);
     check(near(yaw.ref.pos, 0.0f) && near(output.shooter.trigger.cmd.velocity, 0.0f),
         "New arm session rebases cumulative events instead of replaying old actions");
@@ -600,6 +821,17 @@ void test_control_tasks()
     ++input.remote.shots;
     check(cooling.update(input).shooter.trigger.cmd.velocity > 0.0f,
         "Disarming preserves spent heat but still allows fresh referee cooling");
+
+    gimbal_control held_manual(yaw, pitch, config);
+    input.remote.gimbal.mode = gimbal::mode::manual;
+    input.remote.shooter = {true, true, true, false, false, false};
+    input.remote.armed = true;
+    ++input.remote.session;
+    input.shooter.heat_limit = 100.0f;
+    input.shooter.fric_left.fdb.velocity = 100.0f;
+    input.shooter.fric_right.fdb.velocity = -100.0f;
+    check(held_manual.update(input).shooter.trigger.cmd.velocity > 0.0f,
+        "Gimbal task preserves held manual continuous fire instead of replacing it with shots");
 }
 
 void test_vision_telemetry()
@@ -665,6 +897,9 @@ int main()
     test_shooter();
     test_chassis();
     test_remote();
+#if KEYBOARD_CONTROL
+    test_keyboard_remote();
+#endif
     test_control_tasks();
     test_vision_telemetry();
     std::printf("Control tests: %u checks, %u failures\n", checks, failures);

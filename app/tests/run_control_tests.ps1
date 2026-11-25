@@ -2,7 +2,8 @@ param(
     [string]$Compiler = "C:/msys64/ucrt64/bin/g++.exe",
     [string]$CompileDatabase = "",
     [ValidateSet("all", "control", "input")]
-    [string]$Suite = "all"
+    [string]$Suite = "all",
+    [switch]$KeyboardControl
 )
 
 $ErrorActionPreference = "Stop"
@@ -46,6 +47,10 @@ for ($i = 0; $i -lt $tokens.Count; ++$i)
     {
         $flags += $token
     }
+}
+if ($KeyboardControl)
+{
+    $flags += "-DKEYBOARD_CONTROL=1"
 }
 
 $build = Join-Path $repo "build/control-tests"

@@ -42,7 +42,7 @@ gimbal_output gimbal_control::update(const gimbal_input& input)
     mouse_yaw_ = input.remote.mouse_yaw;
     mouse_pitch_ = input.remote.mouse_pitch;
     auto fire = input.remote.shooter;
-    if (!fire.aim_required)
+    if (!fire.aim_required && !fire.continuous)
     {
         // Coalesce delayed gestures to one event; never queue a catch-up burst after a stall.
         fire.fire = input.remote.shots != shots_;
