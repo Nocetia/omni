@@ -37,6 +37,8 @@ inline constexpr chassis_params chassis{
     1.0f,                      // yaw_direction: +1 or -1
     0.0f,                      // follow_kp: fill after confirming yaw_direction
     0.0f,                      // follow_max_wz: rad/s
+    0.03f,                     // turn_tolerance: rad
+    0.2f,                      // turn_rate_tolerance: rad/s
 };
 
 // Fill measured limits and tuned gains before enabling actuator output.

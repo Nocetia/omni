@@ -92,6 +92,10 @@ command controller::update(const input& input, float dt_s)
                 roll_enabled_ = !roll_enabled_;
             }
             turn_requested = value.key.R && !previous_.key.R;//++防止没判别到
+            if (turn_requested)
+            {
+                spin_enabled_ = false;
+            }
 #endif
 
             const float wheel = std::abs(value.wheel);

@@ -211,6 +211,49 @@ void test_gimbal()
         "Gimbal converts body gyro to ZYX Euler rates before passing axis feedback");
 }
 
+void test_gimbal_turn()
+{
+    recording_axis yaw;
+    recording_axis pitch;
+    gimbal::controller controller(yaw, pitch, gimbal_config());
+    imu::attitude::state attitude{};
+    attitude.online = true;
+    attitude.stage = imu::attitude::phase::running;
+    attitude.received_ms = 100;
+    attitude.total_yaw = 1.0f;
+    gimbal::feedback feedback{};
+    feedback.yaw.state = motor::state::online;
+    feedback.pitch.state = motor::state::online;
+    vision::target target{};
+    target.valid = true;
+    target.received_ms = 100;
+    target.yaw = 1.2f;
+    gimbal::command command{};
+    command.mode = gimbal::mode::turn;
+    command.yaw_target = 1.0f + pi;
+    command.yaw_rate = 2.0f;
+    command.yaw_delta = 0.4f;
+    command.pitch_rate = 1.0f;
+    auto output = controller.update(command, attitude, target, feedback, 100, 0.01f);
+    check(output.state.ready && !output.state.fire_allowed && near(yaw.ref.pos, 1.0f + pi) &&
+              near(yaw.ref.vel, 0.0f) && near(pitch.ref.pos, 0.01f),
+        "Turn uses an absolute yaw target, ignores manual/vision yaw and retains pitch input");
+    controller.update(command, attitude, target, feedback, 100, 0.01f);
+    check(near(yaw.ref.pos, 1.0f + pi) && near(pitch.ref.pos, 0.02f),
+        "Repeated turn snapshots do not accumulate another half-turn");
+    command.mode = gimbal::mode::manual;
+    command.yaw_rate = 0.0f;
+    command.yaw_delta = 0.0f;
+    attitude.total_yaw = 1.0f + pi - 0.01f;
+    controller.update(command, attitude, {}, feedback, 100, 0.01f);
+    check(near(yaw.ref.pos, 1.0f + pi),
+        "Completing a turn keeps the world yaw reference instead of resetting to feedback");
+    command.mode = gimbal::mode::turn;
+    command.yaw_target = nan;
+    check(!controller.update(command, attitude, {}, feedback, 100, 0.01f).state.ready,
+        "An invalid absolute yaw target cannot enter the axis controller");
+}
+
 void test_shooter()
 {
     cfg::shooter_params config{};
@@ -763,10 +806,13 @@ void test_keyboard_remote()
     check(controller.update(input, 0.01f).chassis.mode == chassis::mode::follow,
         "Releasing SHIFT restores follow");
 
+    input.value.key.Q = 1;
     input.value.key.R = 1;
     ++input.sequence;
     output = controller.update(input, 0.01f);
     check(output.chassis.ifturn, "R press emits a turn request");
+    check(output.chassis.mode == chassis::mode::follow && near(output.chassis.wz, 0.0f),
+        "R clears the spin toggle even when Q is pressed in the same frame");
     check(!controller.update(input, 0.01f).chassis.ifturn,
         "A cached R press cannot replay a turn request");
     ++input.sequence;
@@ -916,6 +962,23 @@ void test_control_tasks()
               chassis.update(wheels).wheel_lf.mode == motor::mode::relax,
         "Stale wheel feedback stops chassis without blocking gimbal");
 
+    input.remote.gimbal.mode = gimbal::mode::turn;
+    input.remote.gimbal.yaw_target = 0.7f;
+    input.remote.mouse_yaw += 0.4f;
+    ++input.remote.shots;
+    input.remote.shooter.fire = true;
+    input.remote.shooter.continuous = true;
+    output = gimbal.update(input);
+    check(near(yaw.ref.pos, 0.7f) && near(output.shooter.trigger.cmd.velocity, 0.0f) &&
+              output.shooter.fric_left.cmd.velocity > 0.0f,
+        "Head turn suppresses feeding but preserves friction speed and absolute yaw control");
+    input.remote.gimbal.mode = gimbal::mode::manual;
+    input.remote.shooter.fire = false;
+    input.remote.shooter.continuous = false;
+    output = gimbal.update(input);
+    check(near(yaw.ref.pos, 0.7f) && near(output.shooter.trigger.cmd.velocity, 0.0f),
+        "Mouse and single-shot events consumed during a turn do not replay after completion");
+
     input.remote.gimbal.mode = gimbal::mode::autoaim;
     input.remote.shooter = {true, true, true, true, false, false};
     input.vision.valid = true;
@@ -1056,6 +1119,7 @@ int main()
 {
     test_axis();
     test_gimbal();
+    test_gimbal_turn();
     test_shooter();
     test_chassis();
     test_chassis_modes();

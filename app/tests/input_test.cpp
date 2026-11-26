@@ -1,4 +1,6 @@
 #include "control/control.hpp"
+#include "configs/build_config.hpp"
+#include "configs/robot_config.hpp"
 #include "Service/vision.hpp"
 #include "referee.hpp"
 #include "bsp_usb.hpp"
@@ -6,6 +8,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cmath>
 
 extern void input_thread_entry(ULONG);
 extern void referee_shoot_received(const referee::sample<ShootData_t>& sample);
@@ -51,6 +54,37 @@ template <typename T> bool read_packet(referee::sample<T>& destination)
     }
     return available<T>;
 }
+
+#if KEYBOARD_CONTROL
+// Exercise the real TaskInput coordinator with continuous, multi-turn yaw feedback.
+constexpr float front_position = math::two_pi + cfg::chassis.yaw_front;
+constexpr float rear_position = math::two_pi + cfg::chassis.yaw_rear;
+constexpr float start_yaw = 2.0f * math::two_pi + 1.0f;
+
+void publish_remote_frame()
+{
+    ++remote_input.sequence;
+    remote_input.received_ms = now_ms + 1;
+    remote_inputs.publish(remote_input);
+}
+
+void publish_yaw(float position, float velocity, float world_yaw)
+{
+    gimbal_sample motors{};
+    motors.received_ms = now_ms + 1;
+    motors.gimbal.yaw.state = motor::state::online;
+    motors.gimbal.pitch.state = motor::state::online;
+    motors.gimbal.yaw.fdb.position = position;
+    motors.gimbal.yaw.fdb.velocity = velocity;
+    gimbal_feedback.publish(motors);
+    attitude.total_yaw = world_yaw;
+}
+
+bool near(float actual, float expected)
+{
+    return std::isfinite(actual) && std::abs(actual - expected) < 0.0001f;
+}
+#endif
 
 void next_cycle()
 {
@@ -188,9 +222,177 @@ void next_cycle()
             packet<GameRobotStatus_t>.data.robot_id = 0;
             break;
         }
-        default:
+        case 7:
         {
             check(!gimbal.vision_feedback.valid, "Unknown robot ID cannot choose a target color");
+#if KEYBOARD_CONTROL
+            remote_input.value.pause = false;
+            publish_remote_frame();
+            publish_yaw(front_position + 0.2f, 0.0f, start_yaw);
+            break;
+#else
+            throw finished{};
+#endif
+        }
+#if KEYBOARD_CONTROL
+        case 8:
+        {
+            check(!gimbal.remote.armed, "Reconnect establishes the pause edge baseline");
+            remote_input.value.pause = true;
+            publish_remote_frame();
+            break;
+        }
+        case 9:
+        {
+            check(gimbal.remote.armed, "A new pause press arms the head-turn session");
+            remote_input.value.pause = false;
+            remote_input.value.key.Q = 1;
+            publish_remote_frame();
+            break;
+        }
+        case 10:
+        {
+            check(chassis.remote.chassis.mode == chassis::mode::decoupled,
+                "Spin is active before requesting the head turn");
+            remote_input.value.key.Q = 0;
+            remote_input.value.key.R = 1;
+            publish_remote_frame();
+            break;
+        }
+        case 11:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::turn &&
+                      near(gimbal.remote.gimbal.yaw_target, start_yaw + math::pi),
+                "R adds pi to continuous world yaw even when the gimbal is off the front zero");
+            check(chassis.remote.chassis.head == chassis::head::front &&
+                      gimbal.remote.chassis.head == chassis::head::front &&
+                      chassis.remote.chassis.mode == chassis::mode::decoupled &&
+                      near(chassis.remote.chassis.vx, 0.0f) &&
+                      near(chassis.remote.chassis.vy, 0.0f) &&
+                      near(chassis.remote.chassis.wz, 0.0f) && !chassis.remote.chassis.ifturn,
+                "Input consumes R locally and publishes one consistent stopped turn state");
+            // No new remote frame: a cached R must not restart the turn.
+            publish_yaw(front_position + 0.5f, 0.0f, start_yaw + 0.35f);
+            break;
+        }
+        case 12:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::turn &&
+                      near(gimbal.remote.gimbal.yaw_target, start_yaw + math::pi),
+                "World target stays fixed despite joint/base motion and a cached R input");
+            remote_input.value.key.R = 0;
+            publish_remote_frame();
+            publish_yaw(rear_position, 0.0f, start_yaw + math::pi - math::two_pi);
+            break;
+        }
+        case 13:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::turn &&
+                      chassis.remote.chassis.head == chassis::head::front,
+                "Rear mechanical zero and a world yaw one revolution away cannot finish the turn");
+            publish_yaw(rear_position, 0.0f, start_yaw + math::pi);
+            attitude.roll = math::pi / 6.0f;
+            attitude.pitch = math::pi / 3.0f;
+            attitude.gyro.y = 0.25f;
+            attitude.gyro.z = 0.0f;
+            break;
+        }
+        case 14:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::turn &&
+                      chassis.remote.chassis.head == chassis::head::front,
+                "World yaw rate prevents completion despite zero joint speed and gyro Z");
+            remote_input.value.key.R = 1;
+            publish_remote_frame();
+            publish_yaw(rear_position + 0.2f, 1.0f, start_yaw + math::pi - 0.01f);
+            attitude.gyro.y = -std::cos(attitude.roll);
+            attitude.gyro.z = std::sin(attitude.roll);
+            break;
+        }
+        case 15:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::manual &&
+                      chassis.remote.chassis.mode == chassis::mode::follow &&
+                      chassis.remote.chassis.head == chassis::head::rear &&
+                      gimbal.remote.chassis.head == chassis::head::rear,
+                "Settled world yaw commits Rear and follow despite joint motion and new R");
+            remote_input.value.key.R = 0;
+            remote_input.value.key.SHIFT = 1;
+            publish_remote_frame();
+            break;
+        }
+        case 16:
+        {
+            check(chassis.remote.chassis.head == chassis::head::rear &&
+                      chassis.remote.chassis.mode == chassis::mode::decoupled,
+                "The selected rear head persists across normal input publications");
+            remote_input.value.key.R = 1;
+            publish_remote_frame();
+            break;
+        }
+        case 17:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::turn &&
+                      near(gimbal.remote.gimbal.yaw_target, start_yaw - 0.01f) &&
+                      chassis.remote.chassis.head == chassis::head::rear,
+                "Rear-to-front turn subtracts pi from the new continuous world yaw");
+            publish_yaw(front_position + 0.4f, 0.0f, start_yaw - 0.01f);
+            break;
+        }
+        case 18:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::manual &&
+                      chassis.remote.chassis.head == chassis::head::front &&
+                      chassis.remote.chassis.mode == chassis::mode::decoupled,
+                "Returning to Front retains decoupled mode while SHIFT remains held");
+            remote_input.value.key.R = 0;
+            remote_input.value.key.SHIFT = 0;
+            publish_remote_frame();
+            break;
+        }
+        case 19:
+        {
+            check(chassis.remote.chassis.head == chassis::head::front &&
+                      chassis.remote.chassis.mode == chassis::mode::follow,
+                "Releasing SHIFT after the turn restores follow with the selected head");
+            remote_input.value.key.R = 1;
+            publish_remote_frame();
+            break;
+        }
+        case 20:
+        {
+            check(gimbal.remote.gimbal.mode == gimbal::mode::turn,
+                "A later R press can start another turn");
+            remote_input.value.key.R = 0;
+            remote_input.value.pause = true;
+            publish_remote_frame();
+            break;
+        }
+        case 21:
+        {
+            check(!gimbal.remote.armed && !chassis.remote.armed &&
+                      chassis.remote.chassis.head == chassis::head::front,
+                "Disarming cancels a pending turn without committing its target head");
+            remote_input.value.pause = false;
+            publish_remote_frame();
+            break;
+        }
+        case 22:
+        {
+            remote_input.value.pause = true;
+            publish_remote_frame();
+            break;
+        }
+        case 23:
+        {
+            check(gimbal.remote.armed && gimbal.remote.gimbal.mode == gimbal::mode::manual &&
+                      chassis.remote.chassis.head == chassis::head::front,
+                "Rearming does not replay an interrupted head turn");
+            throw finished{};
+        }
+#endif
+        default:
+        {
             throw finished{};
         }
     }

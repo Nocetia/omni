@@ -55,7 +55,7 @@ referee::read() ─────────────────────�
 | 鼠标移动 | 产生新帧 Yaw/Pitch 位移 |
 | Q 按下沿 | 切换小陀螺；自动进入 Decoupled，旋转角速度为 `cfg::remote.wz` |
 | SHIFT 按住 | Decoupled；未开启小陀螺时底盘角速度为零，释放后恢复 Follow |
-| R 按下沿 | 输出一周期 `ifturn`；180° 换头尚未实现 |
+| R 按下沿 | 退出小陀螺；换头期间底盘停转、停止平移，云台固定转 180°，到位后切换 Front/Rear |
 | F 按下沿 | 切换 `aim_rune`，打符模式的下游处理待接入 |
 | C 按下沿 | 切换 Roll 请求，与 fn1 相同；实际 Roll 输出待接入 |
 | X 按下沿 | 切换 `high_frequency`，解锁后初始为高弹频；速度选择待接入 |
@@ -74,8 +74,8 @@ referee::read() ─────────────────────�
 `remote::command.chassis` 使用 `chassis::request`：`vx/vy` 是云台视角系速度，
 `mode` 为 `follow/decoupled`，`head` 选择 `front/rear`，`wz` 仅在 Decoupled 使用。
 `chassis::command` 只表示转换后的物理底盘系速度，底层轮速解算不处理模式。
-Front/Rear 仅选择跟随对齐零位，物理底盘坐标系和轮序不变。当前遥控默认 Front，
-Rear 可通过请求接口选择；R 保留现有占位请求，本版不执行一键换头。
+Front/Rear 仅选择跟随对齐零位，物理底盘坐标系和轮序不变。TaskInput 启动时使用 Front，
+R 换头完成后保持新的 Head，失能不清除已经完成的 Head。
 
 在 `robot/configs/robot_config.hpp` 的 `cfg::chassis` 填写 `yaw_front/yaw_rear`：
 两者都是云台分别对准物理车头/车尾时的 Yaw 电机反馈位置，单位 rad；当前 `0/π` 只是占位。
@@ -90,6 +90,23 @@ Decoupled 直接使用请求的 `wz`，不叠加跟随输出。当前仅用 P，
 云台 Yaw 仍由现有 IMU 世界角位置/速度闭环保持目标：无手动输入时底盘带动云台转动会产生
 反向修正输出，切换底盘模式不重置云台目标。这里要求 IMU 表示云台姿态、坐标方向正确；
 本版不额外叠加底盘旋转补偿。保持效果及 Front/Rear 零位仍需实机验证。
+
+R 的 `ifturn` 边沿由 TaskInput 在调用遥控映射后立即消费，不交给下游任务处理单周期脉冲。
+TaskInput 独占换头状态，并向两个任务发布同一份命令；云台使用 `gimbal::mode::turn` 和
+持续的世界角 `yaw_target`，重复读取不会再加一次 π，也不需要新增跨任务事件队列。
+
+前到后转 +π，后到前转 -π。目标在换头开始时锁定为「当前连续世界 Yaw ±π」，
+之后不随底盘转动或电机反馈改变，也不对目标或到位误差取模。这样保留原来的观察偏角，
+例如从 20° 转到 200°，而不是对准 Rear 的 180° 标定位置；Front/Rear 零位仍用于底盘跟随。
+换头期间底盘强制 Decoupled、`vx/vy/wz=0`，屏蔽手动/自瞄 Yaw 和拨弹，保留手动 Pitch
+及摩擦轮转速；鼠标和单发累计量正常消费，结束后不补执行换头期间的操作。
+
+连续世界角误差不超过 `cfg::chassis.turn_tolerance`（默认 0.03 rad），且世界 Yaw 角速度不超过
+`turn_rate_tolerance`（默认 0.2 rad/s）时提交新的 Head，随后按当前 SHIFT/Q 选择恢复模式：
+通常由新 Head 进入 Follow，SHIFT 按住时继续 Decoupled，不增加持续解耦状态。
+Follow 会对齐剩余的车头偏角，不再追加云台掉头命令；恢复自瞄后，视觉目标仍可改变云台朝向。
+R 会清除进入换头前的小陀螺状态；换头期间的新 R 不排队。失能取消未完成的换头；
+所需反馈暂时无效时停止输出，保持待完成目标，反馈恢复后继续。未额外增加换头超时状态机。
 
 自瞄开火必须同时满足视觉目标新鲜且可达、`vision.fire`、Yaw/Pitch 误差范围、摩擦轮到速和热量余量。
 手动单发也检查摩擦轮和热量；未满足条件的单发不排队等待。

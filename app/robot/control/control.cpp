@@ -50,6 +50,13 @@ gimbal_output gimbal_control::update(const gimbal_input& input)
         fire.fire = input.remote.shots != shots_;
     }
     shots_ = input.remote.shots;
+    if (command.mode == gimbal::mode::turn)
+    {
+        // Cancel feeding while turning, but retain friction speed and consume shot events.
+        fire.fire = false;
+        fire.continuous = true;
+        fire.reverse = false;
+    }
 
     const auto gimbal = gimbal_.update(command, input.attitude, input.vision, input.gimbal,
         input.now_ms, input.dt_s);

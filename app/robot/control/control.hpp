@@ -60,6 +60,7 @@ namespace robot
             off,
             manual,
             autoaim,
+            turn,
         };
 
         struct command
@@ -73,6 +74,7 @@ namespace robot
             float pitch_delta = 0.0f;
             bool roll_enabled = false; // fn1 request; roll actuator behaviour is not implemented yet.
             bool aim_rune = false; // F toggle request; rune aiming is not implemented yet.
+            float yaw_target = 0.0f; // continuous world yaw, rad; used in turn mode
         };
 
         struct feedback
@@ -244,7 +246,7 @@ namespace robot
             float wz = 0.0f; // rad/s, used only in decoupled mode (including spin)
             chassis::mode mode = chassis::mode::follow;
             chassis::head head = chassis::head::front;
-            bool ifturn = false; // One-cycle R request; 180-degree turn is not implemented yet.
+            bool ifturn = false; // R edge; TaskInput consumes it before publishing snapshots.
         };
 
         struct command

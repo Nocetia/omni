@@ -6,6 +6,7 @@
 #include "tx_api.h"
 
 #include <atomic>
+#include <cmath>
 
 namespace
 {
@@ -19,6 +20,87 @@ struct referee_samples
     referee::sample<ShootData_t> shoot{};
     bool shoot_seen = false;
 };
+
+struct head_switch
+{
+    robot::chassis::head active = robot::chassis::head::front;
+    robot::chassis::head target = robot::chassis::head::front;
+    float yaw_target = 0.0f; // continuous world yaw; fixed when the turn starts
+    bool turning = false;
+};
+
+void update_head(robot::remote::command& command, const robot::gimbal_sample& motors,
+    const imu::attitude::state& attitude, uint32_t now_ms, head_switch& state)
+{
+    using namespace robot;
+    auto& request = command.chassis;
+    const bool requested = request.ifturn;
+    request.ifturn = false;
+    request.head = state.active;
+    if (!command.armed)
+    {
+        state.turning = false;
+        return;
+    }
+    if (!state.turning && !requested)
+    {
+        return;
+    }
+
+    const auto& yaw = motors.gimbal.yaw;
+    // Match Gimbal's ZYX world yaw rate; joint speed also includes chassis motion.
+    const float cos_pitch = std::cos(attitude.pitch);
+    const float yaw_rate =
+        (std::sin(attitude.roll) * attitude.gyro.y + std::cos(attitude.roll) * attitude.gyro.z) /
+        cos_pitch;
+    const bool valid = yaw.state == motor::state::online &&
+                       motors.gimbal.pitch.state == motor::state::online && attitude.online &&
+                       attitude.stage == imu::attitude::phase::running &&
+                       now_ms - motors.received_ms <= cfg::control.feedback_timeout_ms &&
+                       now_ms - attitude.received_ms <= cfg::gimbal.attitude_timeout_ms &&
+                       std::isfinite(attitude.total_yaw) &&
+                       std::abs(attitude.pitch) < math::pi / 2.0f && cos_pitch >= 0.01f &&
+                       std::isfinite(yaw_rate);
+    if (!valid)
+    {
+        if (state.turning)
+        {
+            // Keep the pending head until feedback returns or the operator disarms.
+            request.enabled = false;
+            command.gimbal.mode = gimbal::mode::off;
+            command.shooter.enabled = false;
+        }
+        return;
+    }
+
+    const auto& config = cfg::chassis;
+    if (!state.turning)
+    {
+        state.target = state.active == chassis::head::front ? chassis::head::rear :
+                                                            chassis::head::front;
+        // Preserve the current viewing offset: front->rear is +pi, rear->front is -pi.
+        const float delta = state.target == chassis::head::rear ? math::pi : -math::pi;
+        state.yaw_target = attitude.total_yaw + delta;
+        state.turning = true;
+    }
+
+    const float error = state.yaw_target - attitude.total_yaw;
+    if (std::abs(error) <= config.turn_tolerance &&
+        std::abs(yaw_rate) <= config.turn_rate_tolerance)
+    {
+        state.active = state.target;
+        state.turning = false;
+        request.head = state.active;
+        return;
+    }
+
+    request.mode = chassis::mode::decoupled;
+    request.vx = 0.0f;
+    request.vy = 0.0f;
+    request.wz = 0.0f;
+    command.gimbal.mode = gimbal::mode::turn;
+    command.gimbal.yaw_target = state.yaw_target;
+}
 
 void update_referee(robot::gimbal_input& input, referee_samples& samples)
 {
@@ -81,6 +163,7 @@ void input_thread_entry(ULONG)
     gimbal_input gimbal{};
     chassis_input chassis{};
     referee_samples referee_data{};
+    head_switch heading{};
     uint32_t previous_ms = HAL_GetTick();
     for (;;)
     {
@@ -98,7 +181,9 @@ void input_thread_entry(ULONG)
         sample.online = sample.online &&
                         now_ms - sample.received_ms <= cfg::control.command_timeout_ms &&
                         dt_s <= cfg::control.max_dt_s;
-        const auto command = control.update(sample, dt_s);
+        auto command = control.update(sample, dt_s);
+        // Consume R synchronously; only persistent turn targets cross latest-value topics.
+        update_head(command, gimbal_motors, gimbal.attitude, now_ms, heading);
         gimbal.remote = command;
         gimbal.received_ms = gimbal_motors.received_ms;
         gimbal.gimbal = gimbal_motors.gimbal;

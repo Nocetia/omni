@@ -48,6 +48,8 @@ struct chassis_params
     float yaw_direction = 1.0f; // +1 or -1: positive relative yaw is counter-clockwise
     float follow_kp = 0.0f;     // (rad/s)/rad
     float follow_max_wz = 0.0f; // rad/s, nonnegative
+    float turn_tolerance = 0.03f;     // rad, continuous world yaw error to the half-turn target
+    float turn_rate_tolerance = 0.2f; // rad/s, world yaw must slow down before finishing
 };
 
 struct remote_params

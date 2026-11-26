@@ -91,9 +91,11 @@ result controller::update(const command& command, const imu::attitude::state& at
     axis_state yaw{};
     axis_state pitch{};
     const bool command_valid =
-        (command.mode == mode::manual || command.mode == mode::autoaim) &&
+        (command.mode == mode::manual || command.mode == mode::autoaim ||
+            command.mode == mode::turn) &&
         std::isfinite(command.yaw_rate) && std::isfinite(command.pitch_rate) &&
-        std::isfinite(command.yaw_delta) && std::isfinite(command.pitch_delta);
+        std::isfinite(command.yaw_delta) && std::isfinite(command.pitch_delta) &&
+        (command.mode != mode::turn || std::isfinite(command.yaw_target));
     const bool motors_online =
         feedback.yaw.state == motor::state::online && feedback.pitch.state == motor::state::online;
     // A stale/calibrating IMU or offline actuator cannot support closed-loop control.
@@ -132,11 +134,19 @@ result controller::update(const command& command, const imu::attitude::state& at
     }
     else
     {
-        // Restrict operator rates to the configured mechanical operating range.
-        yaw_ref_.vel =
-            std::clamp(command.yaw_rate, -config_.yaw_rate_limit, config_.yaw_rate_limit);
-        yaw_ref_.pos += yaw_ref_.vel * dt_s + command.yaw_delta;
-        yaw_ref_.acc = 0.0f;
+        if (command.mode == mode::turn)
+        {
+            // A persistent target survives skipped snapshots; never add pi on each read.
+            // Turn shares manual reference state so completion keeps this world yaw target.
+            yaw_ref_ = {command.yaw_target, 0.0f, 0.0f};
+        }
+        else
+        {
+            yaw_ref_.vel =
+                std::clamp(command.yaw_rate, -config_.yaw_rate_limit, config_.yaw_rate_limit);
+            yaw_ref_.pos += yaw_ref_.vel * dt_s + command.yaw_delta;
+            yaw_ref_.acc = 0.0f;
+        }
         pitch_ref_.vel =
             std::clamp(command.pitch_rate, -config_.pitch_rate_limit, config_.pitch_rate_limit);
         pitch_ref_.pos += pitch_ref_.vel * dt_s + command.pitch_delta;
